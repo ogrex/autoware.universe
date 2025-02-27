@@ -145,6 +145,10 @@ PointcloudBasedOccupancyGridMapNode::PointcloudBasedOccupancyGridMapNode(
       time_keeper_ = std::make_shared<autoware::universe_utils::TimeKeeper>(time_keeper);
     }
   }
+
+  max_output_delay_ms_ = this->declare_parameter<double>("max_output_delay_ms", 10.0);
+  diagnostics_interface_ptr_ =
+  std::make_unique<autoware::universe_utils::DiagnosticsInterface>(this, "probabilistic_occupancy_grid_map");
 }
 
 void PointcloudBasedOccupancyGridMapNode::obstaclePointcloudCallback(
@@ -256,7 +260,9 @@ void PointcloudBasedOccupancyGridMapNode::onPointcloudWithObstacleAndRaw()
       *occupancy_grid_map_updater_ptr_));
   }
 
+  std::cout<<"diagnostics_interface_ptr_ 1"<<std::endl;
   if (debug_publisher_ptr_ && stop_watch_ptr_) {
+    std::cout<<"diagnostics_interface_ptr_ 2"<<std::endl;
     const double cyclic_time_ms = stop_watch_ptr_->toc("cyclic_time", true);
     const double processing_time_ms = stop_watch_ptr_->toc("processing_time", true);
     const double pipeline_latency_ms =
@@ -270,6 +276,22 @@ void PointcloudBasedOccupancyGridMapNode::onPointcloudWithObstacleAndRaw()
       "debug/processing_time_ms", processing_time_ms);
     debug_publisher_ptr_->publish<autoware_internal_debug_msgs::msg::Float64Stamped>(
       "debug/pipeline_latency_ms", pipeline_latency_ms);
+
+    bool is_delay_within_range = (pipeline_latency_ms <= max_output_delay_ms_);
+    diagnostics_interface_ptr_->clear();
+    diagnostics_interface_ptr_->add_key_value(
+      "is_output_delay_within_range", is_delay_within_range);
+      
+    std::cout<<"diagnostics_interface_ptr_ 3 "<<is_delay_within_range<<std::endl;
+    std::stringstream message;
+    if (!is_delay_within_range) {
+      std::cout<<"diagnostics_interface_ptr_ 4 "<<is_delay_within_range<<std::endl;
+      message << "Output delay (" << pipeline_latency_ms << " ms) exceeds allowed limit (" 
+              << max_output_delay_ms_ << " ms).";
+    }
+    diagnostics_interface_ptr_->update_level_and_message(
+      is_delay_within_range ? diagnostic_msgs::msg::DiagnosticStatus::OK : diagnostic_msgs::msg::DiagnosticStatus::WARN, message.str());
+    diagnostics_interface_ptr_->publish(raw_pointcloud_.header.stamp);
   }
 }
 
