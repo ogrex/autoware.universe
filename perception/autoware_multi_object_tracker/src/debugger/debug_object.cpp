@@ -15,6 +15,7 @@
 #include "debug_object.hpp"
 
 #include "autoware_perception_msgs/msg/tracked_object.hpp"
+#include "autoware/multi_object_tracker/object_model/shapes.hpp"
 
 #include <boost/uuid/uuid.hpp>
 
@@ -50,6 +51,26 @@ int32_t uuidToInt(const boost::uuids::uuid & uuid)
   return boost::uuids::hash_value(uuid);
 }
 }  // namespace
+double getMahalanobisDistance(
+  const geometry_msgs::msg::Point & measurement, const geometry_msgs::msg::Point & tracker,
+  const Eigen::Matrix2d & covariance)
+{
+  Eigen::Vector2d measurement_point;
+  measurement_point << measurement.x, measurement.y;
+  Eigen::Vector2d tracker_point;
+  tracker_point << tracker.x, tracker.y;
+  Eigen::MatrixXd mahalanobis_squared = (measurement_point - tracker_point).transpose() *
+                                        covariance.inverse() * (measurement_point - tracker_point);
+  return std::sqrt(mahalanobis_squared(0));
+}
+
+ Eigen::Matrix2d getXYCovariance(const geometry_msgs::msg::PoseWithCovariance & pose_covariance)
+{
+  Eigen::Matrix2d covariance;
+  covariance << pose_covariance.covariance[0], pose_covariance.covariance[1],
+    pose_covariance.covariance[6], pose_covariance.covariance[7];
+  return covariance;
+}
 
 namespace autoware::multi_object_tracker
 {
@@ -78,6 +99,24 @@ void TrackerObjectDebugger::reset()
   markers_.markers.clear();
 }
 
+double getFormedYawAngle(
+  const geometry_msgs::msg::Quaternion & measurement_quat,
+  const geometry_msgs::msg::Quaternion & tracker_quat, const bool distinguish_front_or_back = true)
+{
+  const double measurement_yaw = autoware_utils::normalize_radian(tf2::getYaw(measurement_quat));
+  const double tracker_yaw = autoware_utils::normalize_radian(tf2::getYaw(tracker_quat));
+  const double angle_range = distinguish_front_or_back ? M_PI : M_PI_2;
+  const double angle_step = distinguish_front_or_back ? 2.0 * M_PI : M_PI;
+  // Fixed measurement_yaw to be in the range of +-90 or 180 degrees of X_t(IDX::YAW)
+  double measurement_fixed_yaw = measurement_yaw;
+  while (angle_range <= tracker_yaw - measurement_fixed_yaw) {
+    measurement_fixed_yaw = measurement_fixed_yaw + angle_step;
+  }
+  while (angle_range <= measurement_fixed_yaw - tracker_yaw) {
+    measurement_fixed_yaw = measurement_fixed_yaw - angle_step;
+  }
+  return std::fabs(measurement_fixed_yaw - tracker_yaw);
+}
 void TrackerObjectDebugger::collect(
   const rclcpp::Time & message_time, const std::list<std::shared_ptr<Tracker>> & list_tracker,
   const types::DynamicObjectList & detected_objects,
@@ -130,6 +169,34 @@ void TrackerObjectDebugger::collect(
     std::vector<float> existence_vector;
     (*(tracker_itr))->getExistenceProbabilityVector(existence_vector);
     object_data.existence_vector = existence_vector;
+    // Store covariance information
+    object_data.covariance = getXYCovariance(tracked_object.kinematics.pose_with_covariance);
+
+    {
+      const auto & associated_object =
+        detected_objects.objects.at(direct_assignment.at(tracker_idx));
+      detection_point = associated_object.kinematics.pose_with_covariance.pose.position;
+      is_associated = true;
+
+      const double dist = autoware_utils::calc_distance2d(
+        associated_object.kinematics.pose_with_covariance.pose.position,
+        tracked_object.kinematics.pose_with_covariance.pose.position);
+      object_data.dist_2d = dist;
+
+      const double area = autoware_utils::get_area(associated_object.shape);
+      object_data.area = area;
+
+      const double angle = getFormedYawAngle(
+        associated_object.kinematics.pose_with_covariance.pose.orientation,
+        tracked_object.kinematics.pose_with_covariance.pose.orientation, false);
+      object_data.angle_diff = angle;
+
+      const double iou = shapes::get2dIoU(associated_object, tracked_object, 1e-2);
+      object_data.iou_2d = iou;
+
+    }
+
+
 
     object_data_list_.push_back(object_data);
   }
@@ -248,6 +315,41 @@ void TrackerObjectDebugger::draw(
 
     text_marker.text = existence_probability_text;
     marker_array.markers.push_back(text_marker);
+
+    // Calculate Mahalanobis distance
+    const double mahalanobis_dist = getMahalanobisDistance(
+      object_data_front.tracker_point, object_data_front.detection_point,
+      object_data_front.covariance);
+
+    // Add Mahalanobis distance marker
+    visualization_msgs::msg::Marker mahalanobis_marker;
+    mahalanobis_marker = marker;
+    mahalanobis_marker.ns = "mahalanobis_distance";
+    mahalanobis_marker.type = visualization_msgs::msg::Marker::TEXT_VIEW_FACING;
+    mahalanobis_marker.action = visualization_msgs::msg::Marker::ADD;
+    mahalanobis_marker.pose.position.z += 2.5;
+    mahalanobis_marker.scale.z = 0.5;
+    mahalanobis_marker.pose.position.x = object_data_front.tracker_point.x;
+    mahalanobis_marker.pose.position.y = object_data_front.tracker_point.y;
+    mahalanobis_marker.pose.position.z = object_data_front.tracker_point.z + 4.0;
+    // Set the color to red
+    mahalanobis_marker.color.r = 1.0;
+    mahalanobis_marker.color.g = 0.0;
+    mahalanobis_marker.color.b = 0.0;
+    mahalanobis_marker.color.a = 1.0;
+
+    std::stringstream mahalanobis_stream;
+    mahalanobis_stream << std::fixed << std::setprecision(3) << mahalanobis_dist;
+    mahalanobis_stream << std::fixed << std::setprecision(2);
+    mahalanobis_stream << "Dist2D: " << object_data_front.dist_2d << "\n";
+    mahalanobis_stream << "Area: " << object_data_front.area << "\n";
+    mahalanobis_stream << "AngleΔ: " << object_data_front.angle_diff << "\n";
+    mahalanobis_stream << "IoU: " << object_data_front.iou_2d;
+
+
+
+    mahalanobis_marker.text =  mahalanobis_stream.str();
+    marker_array.markers.push_back(mahalanobis_marker);
 
     // loop for each object_data in the group
     // boxed to tracker positions
@@ -384,6 +486,9 @@ void TrackerObjectDebugger::getMessage(visualization_msgs::msg::MarkerArray & ma
     marker_array.markers.push_back(delete_marker);
 
     delete_marker.ns = "track_boxes";
+    marker_array.markers.push_back(delete_marker);
+
+    delete_marker.ns = "mahalanobis_distance";
     marker_array.markers.push_back(delete_marker);
 
     for (size_t idx = 0; idx < channel_names_.size(); idx++) {

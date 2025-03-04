@@ -60,6 +60,11 @@ struct ObjectData
 
   // detection channel id
   uint channel_id;
+  Eigen::Matrix2d covariance;  // covariance of x, y
+  double dist_2d;
+  double area;
+  double angle_diff;
+  double iou_2d;
 };
 
 class TrackerObjectDebugger
