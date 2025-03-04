@@ -50,6 +50,26 @@ int32_t uuidToInt(const boost::uuids::uuid & uuid)
   return boost::uuids::hash_value(uuid);
 }
 }  // namespace
+double getMahalanobisDistance(
+  const geometry_msgs::msg::Point & measurement, const geometry_msgs::msg::Point & tracker,
+  const Eigen::Matrix2d & covariance)
+{
+  Eigen::Vector2d measurement_point;
+  measurement_point << measurement.x, measurement.y;
+  Eigen::Vector2d tracker_point;
+  tracker_point << tracker.x, tracker.y;
+  Eigen::MatrixXd mahalanobis_squared = (measurement_point - tracker_point).transpose() *
+                                        covariance.inverse() * (measurement_point - tracker_point);
+  return std::sqrt(mahalanobis_squared(0));
+}
+
+ Eigen::Matrix2d getXYCovariance(const geometry_msgs::msg::PoseWithCovariance & pose_covariance)
+{
+  Eigen::Matrix2d covariance;
+  covariance << pose_covariance.covariance[0], pose_covariance.covariance[1],
+    pose_covariance.covariance[6], pose_covariance.covariance[7];
+  return covariance;
+}
 
 namespace autoware::multi_object_tracker
 {
@@ -130,7 +150,8 @@ void TrackerObjectDebugger::collect(
     std::vector<float> existence_vector;
     (*(tracker_itr))->getExistenceProbabilityVector(existence_vector);
     object_data.existence_vector = existence_vector;
-
+    // Store covariance information
+    object_data.covariance = getXYCovariance(tracked_object.kinematics.pose_with_covariance);
     object_data_list_.push_back(object_data);
   }
 }
@@ -248,6 +269,33 @@ void TrackerObjectDebugger::draw(
 
     text_marker.text = existence_probability_text;
     marker_array.markers.push_back(text_marker);
+
+    // Calculate Mahalanobis distance
+    const double mahalanobis_dist = getMahalanobisDistance(
+      object_data_front.tracker_point, object_data_front.detection_point,
+      object_data_front.covariance);
+
+    // Add Mahalanobis distance marker
+    visualization_msgs::msg::Marker mahalanobis_marker;
+    mahalanobis_marker = marker;
+    mahalanobis_marker.ns = "mahalanobis_distance";
+    mahalanobis_marker.type = visualization_msgs::msg::Marker::TEXT_VIEW_FACING;
+    mahalanobis_marker.action = visualization_msgs::msg::Marker::ADD;
+    mahalanobis_marker.pose.position.z += 2.5;
+    mahalanobis_marker.scale.z = 0.5;
+    mahalanobis_marker.pose.position.x = object_data_front.tracker_point.x;
+    mahalanobis_marker.pose.position.y = object_data_front.tracker_point.y;
+    mahalanobis_marker.pose.position.z = object_data_front.tracker_point.z + 4.0;
+    // Set the color to red
+    mahalanobis_marker.color.r = 1.0;
+    mahalanobis_marker.color.g = 0.0;
+    mahalanobis_marker.color.b = 0.0;
+    mahalanobis_marker.color.a = 1.0;
+
+    std::stringstream mahalanobis_stream;
+    mahalanobis_stream << std::fixed << std::setprecision(3) << mahalanobis_dist;
+    mahalanobis_marker.text =  mahalanobis_stream.str();
+    marker_array.markers.push_back(mahalanobis_marker);
 
     // loop for each object_data in the group
     // boxed to tracker positions
@@ -384,6 +432,9 @@ void TrackerObjectDebugger::getMessage(visualization_msgs::msg::MarkerArray & ma
     marker_array.markers.push_back(delete_marker);
 
     delete_marker.ns = "track_boxes";
+    marker_array.markers.push_back(delete_marker);
+
+    delete_marker.ns = "mahalanobis_distance";
     marker_array.markers.push_back(delete_marker);
 
     for (size_t idx = 0; idx < channel_names_.size(); idx++) {
