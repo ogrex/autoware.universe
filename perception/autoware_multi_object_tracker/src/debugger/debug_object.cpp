@@ -489,8 +489,8 @@ void TrackerObjectDebugger::getMessage(visualization_msgs::msg::MarkerArray & ma
     delete_marker.ns = "track_boxes";
     marker_array.markers.push_back(delete_marker);
 
-    //delete_marker.ns = "mahalanobis_distance";
-    //marker_array.markers.push_back(delete_marker);
+    delete_marker.ns = "mahalanobis_distance";
+    marker_array.markers.push_back(delete_marker);
 
     for (size_t idx = 0; idx < channel_names_.size(); idx++) {
       delete_marker.ns = "detect_boxes_" + channel_names_[idx];
