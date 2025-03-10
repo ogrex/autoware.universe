@@ -173,28 +173,30 @@ void TrackerObjectDebugger::collect(
     object_data.covariance = getXYCovariance(tracked_object.kinematics.pose_with_covariance);
 
     {
-      const auto & associated_object =
-        detected_objects.objects.at(direct_assignment.at(tracker_idx));
-      detection_point = associated_object.kinematics.pose_with_covariance.pose.position;
-      is_associated = true;
+      if (is_associated) {
+        const auto & associated_object =
+        detected_objects.objects.at(direct_assignment.find(tracker_idx)->second);
+        const double dist = autoware_utils::calc_distance2d(
+          associated_object.kinematics.pose_with_covariance.pose.position,
+          tracked_object.kinematics.pose_with_covariance.pose.position);
+        object_data.dist_2d = dist;  
+        
+        const double area = autoware_utils::get_area(associated_object.shape);
+        object_data.area = area;
 
-      const double dist = autoware_utils::calc_distance2d(
-        associated_object.kinematics.pose_with_covariance.pose.position,
-        tracked_object.kinematics.pose_with_covariance.pose.position);
-      object_data.dist_2d = dist;
+        const double angle = getFormedYawAngle(
+          associated_object.kinematics.pose_with_covariance.pose.orientation,
+          tracked_object.kinematics.pose_with_covariance.pose.orientation, false);
+        object_data.angle_diff = angle;
 
-      const double area = autoware_utils::get_area(associated_object.shape);
-      object_data.area = area;
+        const double iou = shapes::get2dIoU(associated_object, tracked_object, 1e-2);
+        object_data.iou_2d = iou;
 
-      const double angle = getFormedYawAngle(
-        associated_object.kinematics.pose_with_covariance.pose.orientation,
-        tracked_object.kinematics.pose_with_covariance.pose.orientation, false);
-      object_data.angle_diff = angle;
+      }
 
-      const double iou = shapes::get2dIoU(associated_object, tracked_object, 1e-2);
-      object_data.iou_2d = iou;
 
-    }
+
+     }
 
 
 
@@ -340,11 +342,10 @@ void TrackerObjectDebugger::draw(
 
     std::stringstream mahalanobis_stream;
     mahalanobis_stream << std::fixed << std::setprecision(3) << mahalanobis_dist;
-    mahalanobis_stream << std::fixed << std::setprecision(2);
-    mahalanobis_stream << "Dist2D: " << object_data_front.dist_2d << "\n";
-    mahalanobis_stream << "Area: " << object_data_front.area << "\n";
-    mahalanobis_stream << "AngleΔ: " << object_data_front.angle_diff << "\n";
-    mahalanobis_stream << "IoU: " << object_data_front.iou_2d;
+    mahalanobis_stream <<"; "  <<object_data_front.dist_2d << "\n";
+    mahalanobis_stream <<"; "  << object_data_front.area << "\n";
+    mahalanobis_stream  <<"; "  << object_data_front.angle_diff << "\n";
+    mahalanobis_stream  <<"; "  << object_data_front.iou_2d;
 
 
 
@@ -488,8 +489,8 @@ void TrackerObjectDebugger::getMessage(visualization_msgs::msg::MarkerArray & ma
     delete_marker.ns = "track_boxes";
     marker_array.markers.push_back(delete_marker);
 
-    delete_marker.ns = "mahalanobis_distance";
-    marker_array.markers.push_back(delete_marker);
+    //delete_marker.ns = "mahalanobis_distance";
+    //marker_array.markers.push_back(delete_marker);
 
     for (size_t idx = 0; idx < channel_names_.size(); idx++) {
       delete_marker.ns = "detect_boxes_" + channel_names_[idx];
