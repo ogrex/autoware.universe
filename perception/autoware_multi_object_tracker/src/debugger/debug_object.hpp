@@ -63,6 +63,7 @@ struct ObjectData
   Eigen::Matrix2d covariance;  // covariance of x, y
   double dist_2d;
   double area;
+  double x,y,z;
   double angle_diff;
   double iou_2d;
 };

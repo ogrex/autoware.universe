@@ -179,9 +179,13 @@ void TrackerObjectDebugger::collect(
         const double dist = autoware_utils::calc_distance2d(
           associated_object.kinematics.pose_with_covariance.pose.position,
           tracked_object.kinematics.pose_with_covariance.pose.position);
-        object_data.dist_2d = dist;  
-        
+        object_data.dist_2d = dist;
+
         const double area = autoware_utils::get_area(associated_object.shape);
+
+        object_data.x = associated_object.shape.dimensions.x;
+        object_data.y = associated_object.shape.dimensions.y;
+        object_data.z = associated_object.shape.dimensions.z;
         object_data.area = area;
 
         const double angle = getFormedYawAngle(
@@ -191,7 +195,13 @@ void TrackerObjectDebugger::collect(
 
         const double iou = shapes::get2dIoU(associated_object, tracked_object, 1e-2);
         object_data.iou_2d = iou;
-
+      } else {
+        object_data.dist_2d = std::numeric_limits<double>::quiet_NaN();
+        object_data.x = std::numeric_limits<double>::quiet_NaN();
+        object_data.y = std::numeric_limits<double>::quiet_NaN();
+        object_data.z = std::numeric_limits<double>::quiet_NaN();
+        object_data.area = std::numeric_limits<double>::quiet_NaN();
+        object_data.angle_diff = std::numeric_limits<double>::quiet_NaN();
       }
 
 
@@ -342,8 +352,8 @@ void TrackerObjectDebugger::draw(
 
     std::stringstream mahalanobis_stream;
     mahalanobis_stream << std::fixed << std::setprecision(3) << mahalanobis_dist;
-    mahalanobis_stream <<"; "  <<object_data_front.dist_2d << "\n";
-    mahalanobis_stream <<"; "  << object_data_front.area << "\n";
+    mahalanobis_stream << "; " << object_data_front.dist_2d << "; "<<object_data_front.tracker_point.x<<"; "<<object_data_front.tracker_point.y<<  "; "<<object_data_front.detection_point.x<<"; "<<object_data_front.detection_point.y<< "\n";
+    mahalanobis_stream <<"; "  << object_data_front.area << " - "<<object_data_front.x<<" - "<<object_data_front.y<<" - "<<object_data_front.z<< "\n";
     mahalanobis_stream  <<"; "  << object_data_front.angle_diff << "\n";
     mahalanobis_stream  <<"; "  << object_data_front.iou_2d;
 
