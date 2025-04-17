@@ -118,11 +118,11 @@ bool VoxelGridBasedEuclideanCluster::cluster(
       voxel_grid_.getCentroidIndexAt(voxel_grid_.getGridCoordinates(point.x, point.y, point.z));
     if (map.find(index) != map.end()) {
       auto & cluster_data_size = clusters_data_size.at(map[index]);
-      if (
-        cluster_data_size >
-        static_cast<std::size_t>(max_cluster_size_) * static_cast<std::size_t>(point_step)) {
-        continue;
-      }
+      // if (
+      //   cluster_data_size >
+      //   static_cast<std::size_t>(max_cluster_size_) * static_cast<std::size_t>(point_step)) {
+      //   continue;
+      // }
       std::memcpy(
         &temporary_clusters.at(map[index]).data[cluster_data_size],
         &pointcloud_msg->data[i * point_step], point_step);
@@ -138,8 +138,7 @@ bool VoxelGridBasedEuclideanCluster::cluster(
   {
     for (size_t i = 0; i < temporary_clusters.size(); ++i) {
       auto & i_cluster_data_size = clusters_data_size.at(i);
-      if (!(min_cluster_size_ <= static_cast<int>(i_cluster_data_size / point_step) &&
-            static_cast<int>(i_cluster_data_size / point_step) <= max_cluster_size_)) {
+      if (!(min_cluster_size_ <= static_cast<int>(i_cluster_data_size / point_step))) {
         continue;
       }
       const auto & cluster = temporary_clusters.at(i);
