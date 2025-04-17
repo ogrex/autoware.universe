@@ -16,6 +16,9 @@
 
 #include "autoware/euclidean_cluster/utils.hpp"
 
+#include <sensor_msgs/msg/point_field.hpp>
+#include <sensor_msgs/point_cloud2_iterator.hpp>
+
 #include <memory>
 #include <vector>
 
@@ -43,11 +46,71 @@ VoxelGridBasedEuclideanClusterNode::VoxelGridBasedEuclideanClusterNode(
   cluster_pub_ = this->create_publisher<tier4_perception_msgs::msg::DetectedObjectsWithFeature>(
     "output", rclcpp::QoS{1});
   debug_pub_ = this->create_publisher<sensor_msgs::msg::PointCloud2>("debug/clusters", 1);
+  debug_marker_pub_ = this->create_publisher<visualization_msgs::msg::MarkerArray>(
+    "debug/markers", rclcpp::QoS{1});
   stop_watch_ptr_ = std::make_unique<autoware_utils::StopWatch<std::chrono::milliseconds>>();
   debug_publisher_ =
     std::make_unique<autoware_utils::DebugPublisher>(this, "voxel_grid_based_euclidean_cluster");
   stop_watch_ptr_->tic("cyclic_time");
   stop_watch_ptr_->tic("processing_time");
+}
+
+void getDebugMarkerArray(
+  const std_msgs::msg::Header & header,
+  const std::vector<tier4_perception_msgs::msg::DetectedObjectWithFeature> & feature_objects,
+  visualization_msgs::msg::MarkerArray & debug_marker_array)
+{
+  for (size_t i = 0; i < feature_objects.size(); ++i) {
+    const auto & feature_object = feature_objects.at(i);
+    const auto & cluster = feature_object.feature.cluster;
+
+    // Create a text marker to display the cluster point number
+    visualization_msgs::msg::Marker text_marker;
+    text_marker.header = header;
+    text_marker.ns = "cluster_point_numbers";
+    text_marker.id = static_cast<int>(i);
+    text_marker.type = visualization_msgs::msg::Marker::TEXT_VIEW_FACING;
+    text_marker.action = visualization_msgs::msg::Marker::ADD;
+
+    // Set the position of the text marker to the centroid of the cluster
+    geometry_msgs::msg::Point centroid;
+    centroid.x = 0.0;
+    centroid.y = 0.0;
+    centroid.z = 0.0;
+
+    sensor_msgs::PointCloud2ConstIterator<float> iter_x(cluster, "x");
+    sensor_msgs::PointCloud2ConstIterator<float> iter_y(cluster, "y");
+    sensor_msgs::PointCloud2ConstIterator<float> iter_z(cluster, "z");
+
+    size_t point_count = 0;
+    for (; iter_x != iter_x.end(); ++iter_x, ++iter_y, ++iter_z) {
+      centroid.x += *iter_x;
+      centroid.y += *iter_y;
+      centroid.z += *iter_z;
+      ++point_count;
+    }
+
+    if (point_count > 0) {
+      centroid.x /= point_count;
+      centroid.y /= point_count;
+      centroid.z /= point_count;
+    }
+
+    text_marker.pose.position = centroid;
+    text_marker.pose.orientation.w = 1.0;
+
+    // Set the text to display the number of points in the cluster
+    text_marker.text = std::to_string(point_count);
+
+    // Set marker scale and color
+    text_marker.scale.z = 0.5;  // Text height
+    text_marker.color.r = 1.0;
+    text_marker.color.g = 1.0;
+    text_marker.color.b = 1.0;
+    text_marker.color.a = 1.0;
+
+    debug_marker_array.markers.push_back(text_marker);
+  }
 }
 
 void VoxelGridBasedEuclideanClusterNode::onPointCloud(
@@ -72,6 +135,11 @@ void VoxelGridBasedEuclideanClusterNode::onPointCloud(
     sensor_msgs::msg::PointCloud2 debug;
     convertObjectMsg2SensorMsg(output, debug);
     debug_pub_->publish(debug);
+
+
+    visualization_msgs::msg::MarkerArray debug_marker_array;
+    getDebugMarkerArray(input_msg->header, output.feature_objects, debug_marker_array);
+    debug_marker_pub_->publish(debug_marker_array);
   }
   if (debug_publisher_) {
     const double processing_time_ms = stop_watch_ptr_->toc("processing_time", true);
