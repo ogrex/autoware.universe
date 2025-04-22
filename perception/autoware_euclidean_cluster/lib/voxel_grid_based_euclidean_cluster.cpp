@@ -19,6 +19,7 @@
 
 #include <unordered_map>
 #include <vector>
+#include <chrono>
 
 namespace autoware::euclidean_cluster
 {
@@ -56,19 +57,46 @@ bool VoxelGridBasedEuclideanCluster::cluster(
   const sensor_msgs::msg::PointCloud2::ConstSharedPtr & pointcloud_msg,
   tier4_perception_msgs::msg::DetectedObjectsWithFeature & objects)
 {
-  // TODO(Saito) implement use_height is false version
+  using Clock = std::chrono::steady_clock;
+  using us = std::chrono::microseconds;
 
+  // Persistent performance accumulators
+  static size_t perf_calls = 0;
+  static constexpr size_t STAGES = 7;
+  static std::array<uint64_t, STAGES> sum_times = {};
+  static std::array<uint64_t, STAGES> min_times;
+  static std::array<uint64_t, STAGES> max_times;
+  if (perf_calls == 0) {
+    for (size_t i = 0; i < STAGES; ++i) {
+      min_times[i] = std::numeric_limits<uint64_t>::max();
+      max_times[i] = 0;
+    }
+  }
+
+  std::array<uint64_t, STAGES> durations;
+  auto t_start = Clock::now();
+
+
+  // TODO(Saito) implement use_height is false version
+  // 1) Convert ROS PointCloud2 to PCL cloud
   // create voxel
   pcl::PointCloud<pcl::PointXYZ>::Ptr pointcloud(new pcl::PointCloud<pcl::PointXYZ>);
   int point_step = pointcloud_msg->point_step;
   pcl::fromROSMsg(*pointcloud_msg, *pointcloud);
+  auto t1 = Clock::now();
+  durations[0] = std::chrono::duration_cast<us>(t1 - t_start).count();
+  // 2) Voxel grid filtering
   pcl::PointCloud<pcl::PointXYZ>::Ptr voxel_map_ptr(new pcl::PointCloud<pcl::PointXYZ>);
   voxel_grid_.setLeafSize(voxel_leaf_size_, voxel_leaf_size_, 100000.0);
   voxel_grid_.setMinimumPointsNumberPerVoxel(min_points_number_per_voxel_);
   voxel_grid_.setInputCloud(pointcloud);
   voxel_grid_.setSaveLeafLayout(true);
   voxel_grid_.filter(*voxel_map_ptr);
+  auto t2 = Clock::now();
+  durations[1] = std::chrono::duration_cast<us>(t2 - t1).count();
 
+
+  // 3) Build 2D centroid cloud
   // voxel is pressed 2d
   pcl::PointCloud<pcl::PointXYZ>::Ptr pointcloud_2d_ptr(new pcl::PointCloud<pcl::PointXYZ>);
   for (const auto & point : voxel_map_ptr->points) {
@@ -78,8 +106,10 @@ bool VoxelGridBasedEuclideanCluster::cluster(
     point2d.z = 0.0;
     pointcloud_2d_ptr->push_back(point2d);
   }
+  auto t3 = Clock::now();
+  durations[2] = std::chrono::duration_cast<us>(t3 - t2).count();
 
-  // create tree
+  // 4) KD-tree + clustering
   pcl::search::KdTree<pcl::PointXYZ>::Ptr tree(new pcl::search::KdTree<pcl::PointXYZ>);
   tree->setInputCloud(pointcloud_2d_ptr);
 
@@ -92,7 +122,10 @@ bool VoxelGridBasedEuclideanCluster::cluster(
   pcl_euclidean_cluster.setSearchMethod(tree);
   pcl_euclidean_cluster.setInputCloud(pointcloud_2d_ptr);
   pcl_euclidean_cluster.extract(cluster_indices);
+  auto t4 = Clock::now();
+  durations[3] = std::chrono::duration_cast<us>(t4 - t3).count();
 
+  // 5) Buffer preparation
   // create map to search cluster index from voxel grid index
   std::unordered_map</* voxel grid index */ int, /* cluster index */ int> map;
   std::vector<sensor_msgs::msg::PointCloud2> temporary_clusters;  // no check about cluster size
@@ -110,7 +143,10 @@ bool VoxelGridBasedEuclideanCluster::cluster(
     temporary_cluster.data.resize(cluster.indices.size() * point_step);
     clusters_data_size.push_back(0);
   }
+  auto t5 = Clock::now();
+  durations[4] = std::chrono::duration_cast<us>(t5 - t4).count();
 
+  // 6) Data copy 
   // create vector of point cloud cluster. vector index is voxel grid index.
   for (size_t i = 0; i < pointcloud->points.size(); ++i) {
     const auto & point = pointcloud->points.at(i);
@@ -133,7 +169,10 @@ bool VoxelGridBasedEuclideanCluster::cluster(
       }
     }
   }
+  auto t6 = Clock::now();
+  durations[5] = std::chrono::duration_cast<us>(t6 - t5).count();
 
+  // 7) Output assembly
   // build output and check cluster size
   {
     for (size_t i = 0; i < temporary_clusters.size(); ++i) {
@@ -164,6 +203,39 @@ bool VoxelGridBasedEuclideanCluster::cluster(
     }
     objects.header = pointcloud_msg->header;
   }
+  auto t7 = Clock::now();
+  durations[6] = std::chrono::duration_cast<us>(t7 - t6).count();
+
+  // Total
+  uint64_t total = 0;
+  for (auto d : durations) total += d;
+  std::cout << "[perf] Total cluster() time: " << total << " us" << std::endl;
+
+  // Update accumulators
+  for (size_t i = 0; i < STAGES; ++i) {
+    sum_times[i] += durations[i];
+    min_times[i] = std::min(min_times[i], durations[i]);
+    max_times[i] = std::max(max_times[i], durations[i]);
+  }
+  ++perf_calls;
+
+  // Periodic summary every 100 calls
+  if (perf_calls % 100 == 0) {
+    static const char* names[STAGES] = {
+      "Decode input", "Voxel filter", "Build centroids",
+      "Clustering", "Buffer prep", "Data copy", "Output build"
+    };
+    std::cout << "[perf-summary after " << perf_calls << " calls]" << std::endl;
+    for (size_t i = 0; i < STAGES; ++i) {
+      uint64_t avg = sum_times[i] / perf_calls;
+      std::cout << "  " << names[i]
+                << ": avg=" << avg << " us"
+                << ", min=" << min_times[i] << " us"
+                << ", max=" << max_times[i] << " us"
+                << std::endl;
+    }
+  }
+
 
   return true;
 }
