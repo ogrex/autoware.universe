@@ -77,16 +77,18 @@ void getDebugMarkerArray(
     centroid.x = 0.0;
     centroid.y = 0.0;
     centroid.z = 0.0;
-
     sensor_msgs::PointCloud2ConstIterator<float> iter_x(cluster, "x");
     sensor_msgs::PointCloud2ConstIterator<float> iter_y(cluster, "y");
     sensor_msgs::PointCloud2ConstIterator<float> iter_z(cluster, "z");
+    sensor_msgs::PointCloud2ConstIterator<uint8_t> iter_intensity(cluster, "intensity");
 
+    int intensity_total=0;
     size_t point_count = 0;
-    for (; iter_x != iter_x.end(); ++iter_x, ++iter_y, ++iter_z) {
+    for (; iter_x != iter_x.end(); ++iter_x, ++iter_y, ++iter_z,++iter_intensity) {
       centroid.x += *iter_x;
       centroid.y += *iter_y;
       centroid.z += *iter_z;
+      intensity_total += *iter_intensity;
       ++point_count;
     }
 
@@ -94,13 +96,19 @@ void getDebugMarkerArray(
       centroid.x /= point_count;
       centroid.y /= point_count;
       centroid.z /= point_count;
+      intensity_total /= point_count;
+      text_marker.color.r = static_cast<float>(intensity_total) / 255.0f;
+      text_marker.color.g = 0.0f;
+      text_marker.color.b = 0.0f;
+      text_marker.color.a = 1.0f;
     }
 
     text_marker.pose.position = centroid;
     text_marker.pose.orientation.w = 1.0;
 
     // Set the text to display the number of points in the cluster
-    text_marker.text = std::to_string(point_count);
+    text_marker.text = std::to_string(point_count) + ":" +
+                       std::to_string(intensity_total);
 
     // Set marker scale and color
     text_marker.scale.z = 0.5;  // Text height
