@@ -26,6 +26,9 @@
 #include <sensor_msgs/msg/point_cloud2.hpp>
 #include <tier4_perception_msgs/msg/detected_objects_with_feature.hpp>
 
+#include <tf2_ros/buffer.h>
+#include <tf2_ros/transform_listener.h>
+
 #include <memory>
 
 namespace autoware::euclidean_cluster
@@ -46,6 +49,14 @@ private:
   std::shared_ptr<VoxelGridBasedEuclideanCluster> cluster_;
   std::unique_ptr<autoware_utils::StopWatch<std::chrono::milliseconds>> stop_watch_ptr_;
   std::unique_ptr<autoware_utils::DebugPublisher> debug_publisher_;
+
+
+  tf2_ros::Buffer tf_buffer_;
+  tf2_ros::TransformListener tf_listener_;
+  void getDebugMarkerArray(
+    const std_msgs::msg::Header & header,
+    const std::vector<tier4_perception_msgs::msg::DetectedObjectWithFeature> & feature_objects,
+    visualization_msgs::msg::MarkerArray & debug_marker_array);
 };
 
 }  // namespace autoware::euclidean_cluster

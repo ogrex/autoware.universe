@@ -41,7 +41,7 @@ public:
 private:
   void objectCallback(
     const tier4_perception_msgs::msg::DetectedObjectsWithFeature::ConstSharedPtr input_msg);
-  bool isValidatedCluster(const sensor_msgs::msg::PointCloud2 & cluster);
+  bool isVaporLikeCluster(const sensor_msgs::msg::PointCloud2 & cluster);
 
   rclcpp::Publisher<tier4_perception_msgs::msg::DetectedObjectsWithFeature>::SharedPtr object_pub_;
   rclcpp::Subscription<tier4_perception_msgs::msg::DetectedObjectsWithFeature>::SharedPtr
@@ -51,6 +51,8 @@ private:
   tf2_ros::TransformListener tf_listener_;
   double intensity_threshold_;
   double existence_probability_threshold_;
+  double z_range_threshold_;
+  double diag_length_threshold_;
   double max_x_;
   double min_x_;
   double max_y_;
