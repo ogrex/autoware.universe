@@ -30,7 +30,7 @@ namespace rviz_plugins
 {
 namespace object_detection
 {
-  DetectedObjectsWithFeatureDisplay::DetectedObjectsWithFeatureDisplay() : ObjectPolygonDisplayBase("detected_objects")
+  DetectedObjectsWithFeatureDisplay::DetectedObjectsWithFeatureDisplay() : ObjectPolygonDisplayBase("detected_objects_with_feature")
 {
 }
 
@@ -55,10 +55,10 @@ void DetectedObjectsWithFeatureDisplay::processMessage(DetectedObjectsWithFeatur
     pointcloud_marker_ptr->pose.orientation.w = 1.0;
     pointcloud_marker_ptr->scale.x = 0.1;  // Point size
     pointcloud_marker_ptr->scale.y = 0.1;  // Point size
-    pointcloud_marker_ptr->color.r = 0.0f;
-    pointcloud_marker_ptr->color.g = 1.0f;
-    pointcloud_marker_ptr->color.b = 0.0f;
-    pointcloud_marker_ptr->color.a = 1.0f;
+    // pointcloud_marker_ptr->color.r = 0.0f;
+    // pointcloud_marker_ptr->color.g = 1.0f;
+    // pointcloud_marker_ptr->color.b = 0.0f;
+    // pointcloud_marker_ptr->color.a = 1.0f;
     pointcloud_marker_ptr->lifetime = rclcpp::Duration::from_seconds(0.15);
     pointcloud_marker_ptr->points.clear();
     pointcloud_marker_ptr->colors.clear();
@@ -76,7 +76,7 @@ void DetectedObjectsWithFeatureDisplay::processMessage(DetectedObjectsWithFeatur
       pointcloud_marker_ptr->points.push_back(point);
 
       std_msgs::msg::ColorRGBA color;
-      color.r = static_cast<float>(*iter_intensity) / 255.0f;
+      color.r = std::clamp(static_cast<float>(*iter_intensity) / 50.0f, 0.0f, 1.0f);
       color.g = 0.0f;
       color.b = 0.0f;
       color.a = 1.0f;

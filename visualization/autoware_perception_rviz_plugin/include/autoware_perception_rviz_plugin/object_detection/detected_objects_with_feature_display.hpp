@@ -38,6 +38,8 @@ public:
 
 private:
   void processMessage(DetectedObjectsWithFeature::ConstSharedPtr msg) override;
+
+  
 };
 
 }  // namespace object_detection
