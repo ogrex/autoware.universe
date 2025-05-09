@@ -21,6 +21,7 @@
 #include <sensor_msgs/point_cloud2_iterator.hpp>
 
 #include <pcl_conversions/pcl_conversions.h>
+#include <pcl/common/common.h>
 
 #include <memory>
 
@@ -33,6 +34,8 @@ LowIntensityClusterFilter::LowIntensityClusterFilter(const rclcpp::NodeOptions &
 {
   intensity_threshold_ = declare_parameter<double>("intensity_threshold");
   existence_probability_threshold_ = declare_parameter<double>("existence_probability_threshold");
+  z_range_threshold_ = declare_parameter<double>("z_range_threshold");
+  diag_length_threshold_ = declare_parameter<double>("diag_length_threshold");
   max_x_ = declare_parameter<double>("max_x");
   min_x_ = declare_parameter<double>("min_x");
   max_y_ = declare_parameter<double>("max_y");
@@ -105,8 +108,9 @@ void LowIntensityClusterFilter::objectCallback(
     int intensity_index = pcl::getFieldIndex(cluster, "intensity");
     if (
       intensity_index != -1 && filter_target_.isTarget(label) && is_inside_validation_range &&
-      !isValidatedCluster(cluster) && existence_probability < existence_probability_threshold_) {
-      continue;
+      isVaporLikeCluster(cluster) && existence_probability < existence_probability_threshold_) {
+      std::cout<<"Vapor-like cluster detected: " << label << ","<<int(cluster.width * cluster.height)<<","<<isVaporLikeCluster(cluster)<< std::endl;
+      continue; // This is likely vapor — filter it
     }
     output_object_msg.feature_objects.emplace_back(feature_object);
   }
@@ -120,23 +124,42 @@ void LowIntensityClusterFilter::objectCallback(
       "debug/processing_time_ms", processing_time_ms);
   }
 }
-bool LowIntensityClusterFilter::isValidatedCluster(const sensor_msgs::msg::PointCloud2 & cluster)
+
+bool LowIntensityClusterFilter::isVaporLikeCluster(const sensor_msgs::msg::PointCloud2 & cluster)
 {
-  double mean_intensity = 0.0;
   if (cluster.point_step < 16) {
     RCLCPP_WARN(get_logger(), "Invalid point cloud data. point_step is less than 16.");
-    return true;
+    return false;
   }
+  // Early rejection: invalid data or large cluster
+  const size_t num_points = cluster.width * cluster.height;
+  if (num_points > 100) {
+    return false;
+  }
+  
+  // Compute mean intensity
+  double mean_intensity = 0.0;
   for (sensor_msgs::PointCloud2ConstIterator<uint8_t> iter(cluster, "intensity");
        iter != iter.end(); ++iter) {
     mean_intensity += static_cast<float>(*iter);
   }
-  const size_t num_points = cluster.width * cluster.height;
   mean_intensity /= static_cast<double>(num_points);
+
+  // Check intensity threshold
   if (mean_intensity > intensity_threshold_) {
-    return true;
+    return false;
   }
-  return false;
+
+  // Convert to PCL and compute bounding metrics
+  pcl::PointCloud<pcl::PointXYZ> cloud;
+  pcl::fromROSMsg(cluster, cloud);  // Convert from ROS2 msg to PCL cloud
+
+  Eigen::Vector4f min_pt, max_pt;
+  pcl::getMinMax3D(cloud, min_pt, max_pt);
+  double diag_length = (max_pt.head<3>() - min_pt.head<3>()).norm();  // Diagonal length
+  double z_range = max_pt.z() - min_pt.z();                           // Z-axis height range
+
+  return z_range <= z_range_threshold_ && diag_length <= diag_length_threshold_;
 }
 
 }  // namespace autoware::low_intensity_cluster_filter

@@ -18,11 +18,16 @@
 
 #include <autoware_utils/ros/debug_publisher.hpp>
 #include <autoware_utils/system/stop_watch.hpp>
+#include <visualization_msgs/msg/marker_array.hpp>
+#include <rclcpp/publisher.hpp>
 #include <rclcpp/rclcpp.hpp>
 
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
 #include <tier4_perception_msgs/msg/detected_objects_with_feature.hpp>
+
+#include <tf2_ros/buffer.h>
+#include <tf2_ros/transform_listener.h>
 
 #include <memory>
 
@@ -39,10 +44,19 @@ private:
   rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr pointcloud_sub_;
   rclcpp::Publisher<tier4_perception_msgs::msg::DetectedObjectsWithFeature>::SharedPtr cluster_pub_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr debug_pub_;
+  rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr debug_marker_pub_;
 
   std::shared_ptr<VoxelGridBasedEuclideanCluster> cluster_;
   std::unique_ptr<autoware_utils::StopWatch<std::chrono::milliseconds>> stop_watch_ptr_;
   std::unique_ptr<autoware_utils::DebugPublisher> debug_publisher_;
+
+
+  tf2_ros::Buffer tf_buffer_;
+  tf2_ros::TransformListener tf_listener_;
+  void getDebugMarkerArray(
+    const std_msgs::msg::Header & header,
+    const std::vector<tier4_perception_msgs::msg::DetectedObjectWithFeature> & feature_objects,
+    visualization_msgs::msg::MarkerArray & debug_marker_array);
 };
 
 }  // namespace autoware::euclidean_cluster
