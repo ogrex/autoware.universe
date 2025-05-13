@@ -36,11 +36,14 @@ VoxelGridBasedEuclideanCluster::VoxelGridBasedEuclideanCluster(
 
 VoxelGridBasedEuclideanCluster::VoxelGridBasedEuclideanCluster(
   bool use_height, int min_cluster_size, int max_cluster_size, float tolerance,
-  float voxel_leaf_size, int min_points_number_per_voxel)
+  float voxel_leaf_size, int min_points_number_per_voxel,
+  int min_voxel_cluster_size_for_filtering, int max_points_per_voxel_in_large_cluster)
 : EuclideanClusterInterface(use_height, min_cluster_size, max_cluster_size),
   tolerance_(tolerance),
   voxel_leaf_size_(voxel_leaf_size),
-  min_points_number_per_voxel_(min_points_number_per_voxel)
+  min_points_number_per_voxel_(min_points_number_per_voxel),
+  min_voxel_cluster_size_for_filtering_(min_voxel_cluster_size_for_filtering),
+  max_points_per_voxel_in_large_cluster_(max_points_per_voxel_in_large_cluster)
 {
 }
 // TODO(badai-nguyen): remove this function when field copying also implemented for
@@ -133,6 +136,9 @@ bool VoxelGridBasedEuclideanCluster::cluster(
       max_points_in_cluster = indices.indices.size();
     }
   }
+
+
+
   
   std::cout << "Maximum number of voxel(point) in a cluster: " << max_points_in_cluster << std::endl;
   
@@ -156,16 +162,21 @@ bool VoxelGridBasedEuclideanCluster::cluster(
     temporary_cluster.data.resize(cluster.indices.size() * point_step);
     clusters_data_size.push_back(0);
   }
+  // Precompute which clusters are large enough based on the voxel threshold.
+  // This avoids repeatedly checking the size during per-point processing. 
+  std::vector<bool> is_large_cluster(cluster_indices.size(), false);
+  for (size_t cluster_idx = 0; cluster_idx < cluster_indices.size(); ++cluster_idx) {
+    if (cluster_indices[cluster_idx].indices.size() > static_cast<size_t>(min_voxel_cluster_size_for_filtering_)) {
+      is_large_cluster[cluster_idx] = true;
+    }
+  }
   auto t5 = Clock::now();
   durations[4] = std::chrono::duration_cast<us>(t5 - t4).count();
 
 
-#define FILTER_VOXEL_POINTS
-
   // 6) Data copy
-  // create vector of point cloud cluster. vector index is voxel grid index.
-
-  constexpr int max_points_per_voxel_ = 5;
+  // Initialize a map to track how many points each voxel has per cluster.
+  // Key: cluster index -> (Key: voxel index -> value: point count)
   std::unordered_map<int, std::unordered_map<int, int>> point_counts_per_voxel_per_cluster;
   for (size_t i = 0; i < pointcloud->points.size(); ++i) {
     const auto & point = pointcloud->points.at(i);
@@ -174,23 +185,19 @@ bool VoxelGridBasedEuclideanCluster::cluster(
     auto map_it = map.find(voxel_index);
 
     if (map_it != map.end()) {
-#ifdef FILTER_VOXEL_POINTS
       // Track point count per voxel per cluster
       int cluster_idx = map_it->second;
-      
-      int & voxel_point_count = point_counts_per_voxel_per_cluster[cluster_idx][voxel_index];
-      if (voxel_point_count >= max_points_per_voxel_) {
-        continue;  // Skip adding this point
+      if (is_large_cluster[cluster_idx]) {
+        int & voxel_point_count = point_counts_per_voxel_per_cluster[cluster_idx][voxel_index];
+        if (voxel_point_count >= max_points_per_voxel_in_large_cluster_) {
+          continue;  // Skip adding this point
+        }
+        voxel_point_count++;
       }
-      voxel_point_count++;
-#endif
+
+
 
       auto & cluster_data_size = clusters_data_size.at(map[voxel_index]);
-      // if (
-      //   cluster_data_size >
-      //   static_cast<std::size_t>(max_cluster_size_) * static_cast<std::size_t>(point_step)) {
-      //   continue;
-      // }
       std::memcpy(
         &temporary_clusters.at(map[voxel_index]).data[cluster_data_size],
         &pointcloud_msg->data[i * point_step], point_step);
