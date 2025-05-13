@@ -15,9 +15,13 @@
 // Co-developed by Tier IV, Inc. and Apex.AI, Inc.
 
 #include "autoware_perception_rviz_plugin/object_detection/detected_objects_with_feature_display.hpp"
-
 #include "autoware_perception_rviz_plugin/object_detection/detected_objects_with_feature_helper.hpp"
 
+#include <pcl/filters/voxel_grid.h>
+#include <pcl_conversions/pcl_conversions.h>
+#include <pcl/point_types.h>
+#include <pcl/kdtree/kdtree.h>
+#include <pcl/segmentation/extract_clusters.h>
 #include <QObject>
 #include <rclcpp/duration.hpp>
 
@@ -167,6 +171,8 @@ void DetectedObjectsWithFeatureDisplay::reset()
   m_marker_common.clearMarkers();
 }
 
+
+
 void DetectedObjectsWithFeatureDisplay::processMessage(
   DetectedObjectsWithFeature::ConstSharedPtr msg)
 {
@@ -237,7 +243,133 @@ void DetectedObjectsWithFeatureDisplay::processMessage(
       }
     }
     add_marker(marker);
+
   }
+
+
+
+  for (const auto & feature_object : msg->feature_objects) {
+    const auto & cluster = feature_object.feature.cluster;
+  
+    // Convert cluster to pcl::PointCloud
+    pcl::PointCloud<pcl::PointXYZ> cloud;
+    pcl::fromROSMsg(cluster, cloud);
+  
+    // 2. Voxel grid the cluster for analysis
+    pcl::PointCloud<pcl::PointXYZ>::Ptr voxel_map_ptr(new pcl::PointCloud<pcl::PointXYZ>);
+    pcl::VoxelGrid<pcl::PointXYZ> voxel_grid;
+    voxel_grid.setLeafSize(0.3f, 0.3f, 10000.f); // Use the same size as in your clustering node
+    voxel_grid.setInputCloud(cloud.makeShared());
+    voxel_grid.setMinimumPointsNumberPerVoxel(1);
+    voxel_grid.setSaveLeafLayout(true);
+    voxel_grid.filter(*voxel_map_ptr);
+
+
+    
+    int total_points = static_cast<int>(cloud.size());
+    int voxel_count = static_cast<int>(voxel_map_ptr->points.size());
+    
+    float density = voxel_count > 0 ? static_cast<float>(total_points) / voxel_count : 0.0f;
+  
+
+    // Step 1: Compute the centroid
+    geometry_msgs::msg::Point centroid{};
+    centroid.x = 0.0;
+    centroid.y = 0.0;
+    centroid.z = 0.0;
+    sensor_msgs::PointCloud2ConstIterator<float> iter_x(cluster, "x");
+    sensor_msgs::PointCloud2ConstIterator<float> iter_y(cluster, "y");
+    sensor_msgs::PointCloud2ConstIterator<float> iter_z(cluster, "z");
+    for (; iter_x != iter_x.end(); ++iter_x, ++iter_y, ++iter_z) {
+      centroid.x += *iter_x;
+      centroid.y += *iter_y;
+      centroid.z += *iter_z;
+    }
+    // Normalize by the number of points
+    centroid.x /= static_cast<float>(total_points);
+    centroid.y /= static_cast<float>(total_points);
+    centroid.z /= static_cast<float>(total_points);
+
+
+
+    // Step 2: Create a text marker
+    auto text_marker = std::make_shared<visualization_msgs::msg::Marker>();
+    text_marker->header = msg->header;
+    text_marker->ns = "cluster_info";
+    text_marker->id = id++;  // Use a unique ID
+    text_marker->type = visualization_msgs::msg::Marker::TEXT_VIEW_FACING;
+    text_marker->action = visualization_msgs::msg::Marker::ADD;
+    text_marker->pose.orientation.w = 1.0;
+    text_marker->pose.position = centroid;
+    text_marker->pose.position.z += 2.0;  // Slightly above the cluster
+    text_marker->pose.orientation.w = 1.0;
+    text_marker->scale.z = 0.5;  // Font size
+    text_marker->color.r = 1.0;
+    text_marker->color.g = 1.0;
+    text_marker->color.b = 1.0;
+    text_marker->color.a = 1.0;
+    text_marker->lifetime = rclcpp::Duration::from_seconds(0.15);
+
+    // // Step 3: Set the displayed text
+    // Compute bounding box
+    float min_x = std::numeric_limits<float>::max();
+    float max_x = std::numeric_limits<float>::lowest();
+    float min_y = min_x, max_y = max_x;
+    float min_z = min_x, max_z = max_x;
+
+    // float intensity_sum = 0.0f;
+    // float intensity_max = 0.0f;
+
+    sensor_msgs::PointCloud2ConstIterator<float> iter_x_m(cluster, "x");
+    sensor_msgs::PointCloud2ConstIterator<float> iter_y_m(cluster, "y");
+    sensor_msgs::PointCloud2ConstIterator<float> iter_z_m(cluster, "z");
+    sensor_msgs::PointCloud2ConstIterator<uint8_t> iter_intensity_m(cluster, "intensity");
+
+    for (; iter_x_m != iter_x_m.end(); ++iter_x_m, ++iter_y_m, ++iter_z_m, ++iter_intensity_m) {
+      float x = *iter_x_m, y = *iter_y_m, z = *iter_z_m;
+      min_x = std::min(min_x, x); max_x = std::max(max_x, x);
+      min_y = std::min(min_y, y); max_y = std::max(max_y, y);
+      min_z = std::min(min_z, z); max_z = std::max(max_z, z);
+      // intensity_sum += static_cast<float>(*iter_intensity_m);
+      // intensity_max = std::max(intensity_max, static_cast<float>(*iter_intensity_m));
+    }
+ 
+    //float avg_intensity = intensity_sum / n;
+    float dx = max_x - min_x, dy = max_y - min_y, dz = max_z - min_z;
+    float volume = dx * dy * dz;
+    //float density_volume = volume > 1e-5f ? static_cast<float>(total_points) / volume : 0.0f;
+
+    std::ostringstream oss;
+    // oss << "Pts: " << marker->points.size() << "\nArea: " << std::fixed << std::setprecision(1)
+    //     << dx * dy << " m²"
+    //     << "\nDensityArea: " << std::fixed << std::setprecision(1) 
+    //     << static_cast<float>(n) / (dx * dy) << " pts/m2"
+    //     << "\nVolume: " << std::fixed << std::setprecision(1) << volume
+    //     << " m3"
+    //     << "\nCentroid: (" << std::fixed << std::setprecision(1)
+    //     << centroid.x << ", " << centroid.y << ", " << centroid.z << ")"
+    //     << "\nDims: [" << dx << " x " << dy << " x " << dz << "]"
+    //     //<< "\nAvg I: " << avg_intensity
+    //     //<< "  Max I: " << intensity_max
+    //     << "\nDensity: " << std::fixed << std::setprecision(2) << density << " pts/m3";
+
+
+
+    // 3. Render text in RViz
+    oss << "Pts: " << total_points << "\nVoxels: " << voxel_count << "\nDensity: " << std::fixed
+        << std::setprecision(2) << density << "\nVolume: " << std::fixed << std::setprecision(1)
+        << volume <<
+      "\nDims: [" << dx << " x " << dy << " x " << dz << "]";
+       
+  
+    text_marker->text = oss.str();
+    // Step 4: Add the marker
+    add_marker(text_marker);
+  }
+
+
+
+  
 }
 
 }  // namespace object_detection

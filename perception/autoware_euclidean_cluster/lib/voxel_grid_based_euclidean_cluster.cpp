@@ -17,6 +17,7 @@
 #include <pcl/kdtree/kdtree.h>
 #include <pcl/segmentation/extract_clusters.h>
 
+#include <cstddef>
 #include <unordered_map>
 #include <vector>
 #include <chrono>
@@ -118,12 +119,24 @@ bool VoxelGridBasedEuclideanCluster::cluster(
   pcl::EuclideanClusterExtraction<pcl::PointXYZ> pcl_euclidean_cluster;
   pcl_euclidean_cluster.setClusterTolerance(tolerance_);
   pcl_euclidean_cluster.setMinClusterSize(1);
-  pcl_euclidean_cluster.setMaxClusterSize(max_cluster_size_);
+  pcl_euclidean_cluster.setMaxClusterSize(600);
   pcl_euclidean_cluster.setSearchMethod(tree);
   pcl_euclidean_cluster.setInputCloud(pointcloud_2d_ptr);
   pcl_euclidean_cluster.extract(cluster_indices);
   auto t4 = Clock::now();
   durations[3] = std::chrono::duration_cast<us>(t4 - t3).count();
+
+  size_t max_points_in_cluster = 0;
+
+  for (const auto& indices : cluster_indices) {
+    if (indices.indices.size() > max_points_in_cluster) {
+      max_points_in_cluster = indices.indices.size();
+    }
+  }
+  
+  std::cout << "Maximum number of voxel(point) in a cluster: " << max_points_in_cluster << std::endl;
+  
+
 
   // 5) Buffer preparation
   // create map to search cluster index from voxel grid index
@@ -146,31 +159,105 @@ bool VoxelGridBasedEuclideanCluster::cluster(
   auto t5 = Clock::now();
   durations[4] = std::chrono::duration_cast<us>(t5 - t4).count();
 
-  // 6) Data copy 
+
+#define FILTER_VOXEL_POINTS
+
+  // 6) Data copy
   // create vector of point cloud cluster. vector index is voxel grid index.
+
+  constexpr int max_points_per_voxel_ = 5;
+  std::unordered_map<int, std::unordered_map<int, int>> point_counts_per_voxel_per_cluster;
   for (size_t i = 0; i < pointcloud->points.size(); ++i) {
     const auto & point = pointcloud->points.at(i);
-    const int index =
+    const int voxel_index =
       voxel_grid_.getCentroidIndexAt(voxel_grid_.getGridCoordinates(point.x, point.y, point.z));
-    if (map.find(index) != map.end()) {
-      auto & cluster_data_size = clusters_data_size.at(map[index]);
+    auto map_it = map.find(voxel_index);
+
+    if (map_it != map.end()) {
+#ifdef FILTER_VOXEL_POINTS
+      // Track point count per voxel per cluster
+      int cluster_idx = map_it->second;
+      
+      int & voxel_point_count = point_counts_per_voxel_per_cluster[cluster_idx][voxel_index];
+      if (voxel_point_count >= max_points_per_voxel_) {
+        continue;  // Skip adding this point
+      }
+      voxel_point_count++;
+#endif
+
+      auto & cluster_data_size = clusters_data_size.at(map[voxel_index]);
       // if (
       //   cluster_data_size >
       //   static_cast<std::size_t>(max_cluster_size_) * static_cast<std::size_t>(point_step)) {
       //   continue;
       // }
       std::memcpy(
-        &temporary_clusters.at(map[index]).data[cluster_data_size],
+        &temporary_clusters.at(map[voxel_index]).data[cluster_data_size],
         &pointcloud_msg->data[i * point_step], point_step);
       cluster_data_size += point_step;
-      if (cluster_data_size == temporary_clusters.at(map[index]).data.size()) {
-        temporary_clusters.at(map[index])
-          .data.resize(temporary_clusters.at(map[index]).data.size() * 2);
+      if (cluster_data_size == temporary_clusters.at(map[voxel_index]).data.size()) {
+        temporary_clusters.at(map[voxel_index])
+          .data.resize(temporary_clusters.at(map[voxel_index]).data.size() * 2);
       }
     }
   }
   auto t6 = Clock::now();
   durations[5] = std::chrono::duration_cast<us>(t6 - t5).count();
+
+  // // === Density estimation per cluster ===
+  // std::vector<int> voxel_counts_per_cluster(cluster_indices.size(), 0);
+  // std::vector<int> point_counts_per_cluster(cluster_indices.size(), 0);
+  // std::unordered_map<int, std::unordered_set<int>> voxel_set_per_cluster;
+
+  // for (size_t i = 0; i < pointcloud->points.size(); ++i) {
+  //   const auto & point = pointcloud->points.at(i);
+  //   const int voxel_index = voxel_grid_.getCentroidIndexAt(
+  //     voxel_grid_.getGridCoordinates(point.x, point.y, point.z));
+  //   auto it = map.find(voxel_index);
+  //   if (it != map.end()) {
+  //     int cluster_idx = it->second;
+  //     point_counts_per_cluster[cluster_idx]++;
+  //     voxel_set_per_cluster[cluster_idx].insert(voxel_index);
+  //   }
+  // }
+  // // Output density info
+  // for (size_t i = 0; i < cluster_indices.size(); ++i) {
+  //   int point_count = point_counts_per_cluster[i];
+  //   int voxel_count = static_cast<int>(voxel_set_per_cluster[i].size());
+  //   if (voxel_count > 0) {
+  //     float density = static_cast<float>(point_count) / voxel_count;
+  //     std::cout << "[cluster " << i << "] Points: " << point_count
+  //               << ", Voxels: " << voxel_count
+  //               << ", Density (pts/voxel): " << density << std::endl;
+  //   } else {
+  //     std::cout << "[cluster " << i << "] No voxels found." << std::endl;
+  //   }
+  // }
+
+  // // === Max point count per voxel in each cluster ===
+  // std::unordered_map<int, std::unordered_map<int, int>> voxel_point_count_per_cluster;
+  // // cluster_idx -> (voxel_index -> count)
+
+  // for (size_t i = 0; i < pointcloud->points.size(); ++i) {
+  //   const auto & point = pointcloud->points.at(i);
+  //   const int voxel_index = voxel_grid_.getCentroidIndexAt(
+  //     voxel_grid_.getGridCoordinates(point.x, point.y, point.z));
+  //   auto it = map.find(voxel_index);
+  //   if (it != map.end()) {
+  //     int cluster_idx = it->second;
+  //     voxel_point_count_per_cluster[cluster_idx][voxel_index]++;
+  //   }
+  // }
+
+  // // Report max point count per voxel per cluster
+  // for (const auto & [cluster_idx, voxel_map] : voxel_point_count_per_cluster) {
+  //   int max_points_in_voxel = 0;
+  //   for (const auto & [voxel_index, count] : voxel_map) {
+  //     max_points_in_voxel = std::max(max_points_in_voxel, count);
+  //   }
+  //   std::cout << "[cluster " << cluster_idx << "] Max points in any voxel: "
+  //             << max_points_in_voxel << std::endl;
+  // }
 
   // 7) Output assembly
   // build output and check cluster size

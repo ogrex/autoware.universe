@@ -78,6 +78,9 @@ ShapeEstimationNode::ShapeEstimationNode(const rclcpp::NodeOptions & node_option
   stop_watch_ptr_->tic("cyclic_time");
   stop_watch_ptr_->tic("processing_time");
   published_time_publisher_ = std::make_unique<autoware_utils::PublishedTimePublisher>(this);
+  std::ofstream log_file("/tmp/shape_estimation_profile.csv", std::ios_base::out);
+  log_file << "cluster_size,time_us\n";
+
 }
 
 static autoware_perception_msgs::msg::ObjectClassification::_label_type get_label(
@@ -111,6 +114,12 @@ void ShapeEstimationNode::callback(const DetectedObjectsWithFeature::ConstShared
   // Create ml model input batch
   DetectedObjectsWithFeature input_trt_batch;
 
+
+  // For summary logging
+  std::vector<size_t> cluster_sizes;
+  std::vector<int64_t> estimation_times_us;
+  std::vector<int> labels;
+
   // Estimate shape for each object and pack msg
   for (const auto & feature_object : input_msg->feature_objects) {
     const auto & object = feature_object.object;
@@ -133,7 +142,8 @@ void ShapeEstimationNode::callback(const DetectedObjectsWithFeature::ConstShared
       continue;
     }
 #endif
-
+    
+    const auto shape_start = std::chrono::steady_clock::now();
     // estimate shape and pose
     autoware_perception_msgs::msg::Shape shape;
     geometry_msgs::msg::Pose pose;
@@ -151,6 +161,13 @@ void ShapeEstimationNode::callback(const DetectedObjectsWithFeature::ConstShared
     const bool estimated_success = estimator_->estimateShapeAndPose(
       label, *cluster, ref_yaw_info, ref_shape_size_info, ref_pose, shape, pose);
 
+    
+    const auto shape_end = std::chrono::steady_clock::now();
+    const auto duration_us = std::chrono::duration_cast<std::chrono::microseconds>(shape_end - shape_start).count();
+
+    cluster_sizes.push_back(cluster->size());
+    estimation_times_us.push_back(duration_us);
+    labels.push_back(label);
     // If the shape estimation fails, change to Unknown object.
     if (!fix_filtered_objects_label_to_unknown_ && !estimated_success) {
       continue;
@@ -174,6 +191,16 @@ void ShapeEstimationNode::callback(const DetectedObjectsWithFeature::ConstShared
   }
 #endif
 
+
+  // Summary logging
+  std::ofstream log_file("/tmp/shape_estimation_profile.csv", std::ios_base::app);
+  if (log_file.is_open()) {
+    for (size_t i = 0; i < cluster_sizes.size(); ++i) {
+      log_file << cluster_sizes[i] << "," << estimation_times_us[i] << "," << labels[i] << "\n";
+    }
+  }
+
+  
   // Publish
   pub_->publish(output_msg);
   published_time_publisher_->publish_if_subscribed(pub_, output_msg.header.stamp);
