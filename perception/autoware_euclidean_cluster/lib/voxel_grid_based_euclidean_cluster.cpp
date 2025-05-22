@@ -38,14 +38,40 @@ VoxelGridBasedEuclideanCluster::VoxelGridBasedEuclideanCluster(
 VoxelGridBasedEuclideanCluster::VoxelGridBasedEuclideanCluster(
   bool use_height, int min_cluster_size, int max_cluster_size, float tolerance,
   float voxel_leaf_size, int min_points_number_per_voxel, int min_voxel_cluster_size_for_filtering,
-  int max_points_per_voxel_in_large_cluster)
+  int max_points_per_voxel_in_large_cluster, int max_num_points_per_cluster)
 : EuclideanClusterInterface(use_height, min_cluster_size, max_cluster_size),
   tolerance_(tolerance),
   voxel_leaf_size_(voxel_leaf_size),
   min_points_number_per_voxel_(min_points_number_per_voxel),
   min_voxel_cluster_size_for_filtering_(min_voxel_cluster_size_for_filtering),
-  max_points_per_voxel_in_large_cluster_(max_points_per_voxel_in_large_cluster)
+  max_points_per_voxel_in_large_cluster_(max_points_per_voxel_in_large_cluster),
+  max_num_points_per_cluster_(max_num_points_per_cluster)
 {
+}
+
+// After processing all clusters, publish a summary of diagnostics.
+void VoxelGridBasedEuclideanCluster::publishDiagnosticsSummary(
+  size_t skipped_cluster_count,
+  const sensor_msgs::msg::PointCloud2::ConstSharedPtr & pointcloud_msg)
+{
+  if (!diagnostics_interface_ptr_) {
+    return;
+  }
+  diagnostics_interface_ptr_->clear();
+  std::string summary;
+  if (skipped_cluster_count > 0) {
+    summary = std::to_string(skipped_cluster_count) +
+              " clusters skipped because cluster point size exceeds the maximum allowed " +
+              std::to_string(max_cluster_size_);
+    diagnostics_interface_ptr_->add_key_value("is_cluster_data_size_within_range", false);
+  } else {
+    diagnostics_interface_ptr_->add_key_value("is_cluster_data_size_within_range", true);
+  }
+  diagnostics_interface_ptr_->update_level_and_message(
+    skipped_cluster_count > 0 ? static_cast<int8_t>(diagnostic_msgs::msg::DiagnosticStatus::WARN)
+                              : static_cast<int8_t>(diagnostic_msgs::msg::DiagnosticStatus::OK),
+    summary);
+  diagnostics_interface_ptr_->publish(pointcloud_msg->header.stamp);
 }
 
 // TODO(badai-nguyen): remove this function when field copying also implemented for
@@ -70,7 +96,8 @@ bool VoxelGridBasedEuclideanCluster::cluster(
   pcl::fromROSMsg(*pointcloud_msg, *pointcloud);
   // 2) Voxel grid filtering
   pcl::PointCloud<pcl::PointXYZ>::Ptr voxel_map_ptr(new pcl::PointCloud<pcl::PointXYZ>);
-  voxel_grid_.setLeafSize(voxel_leaf_size_, voxel_leaf_size_, 100000.0);
+  constexpr float Z_AXIS_VOXEL_SIZE = 100000.0f;
+  voxel_grid_.setLeafSize(voxel_leaf_size_, voxel_leaf_size_, Z_AXIS_VOXEL_SIZE);
   voxel_grid_.setMinimumPointsNumberPerVoxel(min_points_number_per_voxel_);
   voxel_grid_.setInputCloud(pointcloud);
   voxel_grid_.setSaveLeafLayout(true);
@@ -162,11 +189,18 @@ bool VoxelGridBasedEuclideanCluster::cluster(
 
   // build output and check cluster size
   {
+    size_t skipped_cluster_count = 0;  // Count the skipped clusters
     for (size_t i = 0; i < temporary_clusters.size(); ++i) {
       auto & i_cluster_data_size = clusters_data_size.at(i);
       int cluster_size = static_cast<int>(i_cluster_data_size / point_step);
       if (cluster_size < min_cluster_size_) {
         // Cluster size is below the minimum threshold; skip without messaging.
+        // Here min_cluster_size_ is used as the minimum number of points in a cluster.
+        continue;
+      }
+      if (cluster_size > max_num_points_per_cluster_) {
+        // Cluster size exceeds the maximum threshold; log a warning.
+        skipped_cluster_count++;
         continue;
       }
       const auto & cluster = temporary_clusters.at(i);
@@ -191,6 +225,8 @@ bool VoxelGridBasedEuclideanCluster::cluster(
       objects.feature_objects.push_back(feature_object);
     }
     objects.header = pointcloud_msg->header;
+    // Publish the diagnostics summary.
+    publishDiagnosticsSummary(skipped_cluster_count, pointcloud_msg);
   }
 
   return true;
