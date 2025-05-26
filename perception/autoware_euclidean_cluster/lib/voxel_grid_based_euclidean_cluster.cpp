@@ -19,6 +19,8 @@
 #include <pcl/kdtree/kdtree.h>
 #include <pcl/segmentation/extract_clusters.h>
 
+#include <algorithm>
+#include <random>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -48,32 +50,6 @@ VoxelGridBasedEuclideanCluster::VoxelGridBasedEuclideanCluster(
   max_num_points_per_cluster_(max_num_points_per_cluster)
 {
 }
-
-// After processing all clusters, publish a summary of diagnostics.
-void VoxelGridBasedEuclideanCluster::publishDiagnosticsSummary(
-  size_t skipped_cluster_count,
-  const sensor_msgs::msg::PointCloud2::ConstSharedPtr & pointcloud_msg)
-{
-  if (!diagnostics_interface_ptr_) {
-    return;
-  }
-  diagnostics_interface_ptr_->clear();
-  std::string summary;
-  if (skipped_cluster_count > 0) {
-    summary = std::to_string(skipped_cluster_count) +
-              " clusters skipped because cluster point size exceeds the maximum allowed " +
-              std::to_string(max_cluster_size_);
-    diagnostics_interface_ptr_->add_key_value("is_cluster_data_size_within_range", false);
-  } else {
-    diagnostics_interface_ptr_->add_key_value("is_cluster_data_size_within_range", true);
-  }
-  diagnostics_interface_ptr_->update_level_and_message(
-    skipped_cluster_count > 0 ? static_cast<int8_t>(diagnostic_msgs::msg::DiagnosticStatus::WARN)
-                              : static_cast<int8_t>(diagnostic_msgs::msg::DiagnosticStatus::OK),
-    summary);
-  diagnostics_interface_ptr_->publish(pointcloud_msg->header.stamp);
-}
-
 // TODO(badai-nguyen): remove this function when field copying also implemented for
 // euclidean_cluster.cpp
 bool VoxelGridBasedEuclideanCluster::cluster(
@@ -127,8 +103,8 @@ bool VoxelGridBasedEuclideanCluster::cluster(
   pcl_euclidean_cluster.extract(cluster_indices);
 
   // 5) Buffer preparation
-  // create map to search cluster index from voxel grid index
-  std::unordered_map</* voxel grid index */ int, /* cluster index */ int> map;
+  // Map to store the mapping between voxel grid indices and their corresponding cluster indices
+  std::unordered_map</* voxel grid index */ int, /* cluster index */ int> voxel_to_cluster_map;
   std::vector<sensor_msgs::msg::PointCloud2> temporary_clusters;  // no check about cluster size
   std::vector<size_t> clusters_data_size;
   temporary_clusters.resize(cluster_indices.size());
@@ -136,7 +112,7 @@ bool VoxelGridBasedEuclideanCluster::cluster(
     const auto & cluster = cluster_indices.at(cluster_idx);
     auto & temporary_cluster = temporary_clusters.at(cluster_idx);
     for (const auto & point_idx : cluster.indices) {
-      map[point_idx] = cluster_idx;
+      voxel_to_cluster_map[point_idx] = cluster_idx;
     }
     temporary_cluster.height = pointcloud_msg->height;
     temporary_cluster.fields = pointcloud_msg->fields;
@@ -147,26 +123,38 @@ bool VoxelGridBasedEuclideanCluster::cluster(
   // Precompute which clusters are large enough based on the voxel threshold.
   // This avoids repeatedly checking the size during per-point processing.
   std::vector<bool> is_large_cluster(cluster_indices.size(), false);
+  std::vector<bool> is_extreme_large_cluster(cluster_indices.size(), false);
+
+  const size_t large_cluster_threshold = static_cast<size_t>(min_voxel_cluster_size_for_filtering_);
+  const size_t extreme_large_cluster_threshold = 2 * large_cluster_threshold;
+
   for (size_t cluster_idx = 0; cluster_idx < cluster_indices.size(); ++cluster_idx) {
-    if (
-      cluster_indices[cluster_idx].indices.size() >
-      static_cast<size_t>(min_voxel_cluster_size_for_filtering_)) {
-      is_large_cluster[cluster_idx] = true;
-    }
+    const size_t cluster_size = cluster_indices[cluster_idx].indices.size();
+    is_large_cluster[cluster_idx] = cluster_size > large_cluster_threshold;
+    is_extreme_large_cluster[cluster_idx] = cluster_size > extreme_large_cluster_threshold;
   }
 
   // 6) Data copy
   // Initialize a map to track how many points each voxel has per cluster.
   // Key: cluster index -> (Key: voxel index -> value: point count)
   std::unordered_map<int, std::unordered_map<int, int>> point_counts_per_voxel_per_cluster;
-  for (size_t i = 0; i < pointcloud->points.size(); ++i) {
-    const auto & point = pointcloud->points.at(i);
+  std::vector<size_t> random_indices(pointcloud->points.size());
+  static std::default_random_engine rng(42);
+  std::iota(random_indices.begin(), random_indices.end(), 0);
+  std::shuffle(random_indices.begin(), random_indices.end(), rng);
+  for (size_t i = 0; i < random_indices.size(); ++i) {
+    const auto & point = pointcloud->points.at(random_indices[i]);
+    // for (size_t i = 0; i < pointcloud->points.size(); ++i) {
+    // const auto & point = pointcloud->points.at(i);
     const int voxel_index =
       voxel_grid_.getCentroidIndexAt(voxel_grid_.getGridCoordinates(point.x, point.y, point.z));
-    auto map_it = map.find(voxel_index);
-    if (map_it != map.end()) {
+    auto voxel_to_cluster_map_it = voxel_to_cluster_map.find(voxel_index);
+    if (voxel_to_cluster_map_it != voxel_to_cluster_map.end()) {
       // Track point count per voxel per cluster
-      int cluster_idx = map_it->second;
+      int cluster_idx = voxel_to_cluster_map_it->second;
+      if (is_extreme_large_cluster[cluster_idx]) {
+        continue;
+      }
       if (is_large_cluster[cluster_idx]) {
         int & voxel_point_count = point_counts_per_voxel_per_cluster[cluster_idx][voxel_index];
         if (voxel_point_count >= max_points_per_voxel_in_large_cluster_) {
@@ -175,21 +163,20 @@ bool VoxelGridBasedEuclideanCluster::cluster(
         voxel_point_count++;
       }
 
-      auto & cluster_data_size = clusters_data_size.at(map[voxel_index]);
+      auto & cluster_data_size = clusters_data_size.at(voxel_to_cluster_map_it->second);
       std::memcpy(
-        &temporary_clusters.at(map[voxel_index]).data[cluster_data_size],
+        &temporary_clusters.at(voxel_to_cluster_map_it->second).data[cluster_data_size],
         &pointcloud_msg->data[i * point_step], point_step);
       cluster_data_size += point_step;
-      if (cluster_data_size == temporary_clusters.at(map[voxel_index]).data.size()) {
-        temporary_clusters.at(map[voxel_index])
-          .data.resize(temporary_clusters.at(map[voxel_index]).data.size() * 2);
+      if (cluster_data_size == temporary_clusters.at(voxel_to_cluster_map_it->second).data.size()) {
+        temporary_clusters.at(voxel_to_cluster_map_it->second)
+          .data.resize(temporary_clusters.at(voxel_to_cluster_map_it->second).data.size() * 2);
       }
     }
   }
 
   // build output and check cluster size
   {
-    size_t skipped_cluster_count = 0;  // Count the skipped clusters
     for (size_t i = 0; i < temporary_clusters.size(); ++i) {
       auto & i_cluster_data_size = clusters_data_size.at(i);
       int cluster_size = static_cast<int>(i_cluster_data_size / point_step);
@@ -199,8 +186,6 @@ bool VoxelGridBasedEuclideanCluster::cluster(
         continue;
       }
       if (cluster_size > max_num_points_per_cluster_) {
-        // Cluster size exceeds the maximum threshold; log a warning.
-        skipped_cluster_count++;
         continue;
       }
       const auto & cluster = temporary_clusters.at(i);
@@ -225,8 +210,6 @@ bool VoxelGridBasedEuclideanCluster::cluster(
       objects.feature_objects.push_back(feature_object);
     }
     objects.header = pointcloud_msg->header;
-    // Publish the diagnostics summary.
-    publishDiagnosticsSummary(skipped_cluster_count, pointcloud_msg);
   }
 
   return true;
