@@ -291,11 +291,11 @@ Eigen::MatrixXd DataAssociation::calcScoreMatrix(
   // Pre-compute inverse covariance for each tracker
   std::vector<InverseCovariance2D> inv_covs;
 
-  precomputeInverseCovariancesEigen(tracked_objects, inv_covs);
-  // inv_covs.reserve(tracked_objects.size());
-  // for (const auto & tracked_object : tracked_objects) {
-  //   inv_covs.push_back(precomputeInverseCovarianceFromPose(tracked_object.pose_covariance));
-  // }
+  // precomputeInverseCovariancesEigen(tracked_objects, inv_covs);
+  inv_covs.reserve(tracked_objects.size());
+  for (const auto & tracked_object : tracked_objects) {
+    inv_covs.push_back(precomputeInverseCovarianceFromPose(tracked_object.pose_covariance));
+  }
 
   // For each measurement, find nearby trackers using R-tree
 
