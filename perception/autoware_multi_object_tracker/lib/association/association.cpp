@@ -34,7 +34,7 @@
 namespace
 {
 
-double getMahalanobisDistance(
+inline double getMahalanobisDistance(
   const geometry_msgs::msg::Point & measurement, const geometry_msgs::msg::Point & tracker,
   const Eigen::Matrix2d & covariance)
 {
@@ -43,22 +43,24 @@ double getMahalanobisDistance(
   const double dy = measurement.y - tracker.y;
 
   // Pre-compute inverse elements (covariance is 2x2)
-  const double det = covariance(0, 0) * covariance(1, 1) - covariance(0, 1) * covariance(1, 0);
-  const double inv_det = 1.0 / det;
-  const double inv00 = covariance(1, 1) * inv_det;
-  const double inv01 = -covariance(0, 1) * inv_det;
-  const double inv11 = covariance(0, 0) * inv_det;
+  // Extract elements of the symmetric covariance matrix
+  const double a = covariance(0, 0);
+  const double b = covariance(0, 1);  // covariance(1, 0) should be equal
+  const double d = covariance(1, 1);
 
-  // Direct computation of (dx,dy) * inv_covariance * (dx,dy)^T
-  return dx * (inv00 * dx + inv01 * dy) + dy * (inv01 * dx + inv11 * dy);
+  // Compute determinant using symmetry (b² instead of b*c)
+  const double det = a * d - b * b;
+
+  // Compute numerator using expanded quadratic form
+  return (d * dx * dx - 2.0 * b * dx * dy + a * dy * dy) / det;
 }
 
-Eigen::Matrix2d getXYCovariance(const std::array<double, 36> & pose_covariance)
-{
-  Eigen::Matrix2d covariance;
-  covariance << pose_covariance[0], pose_covariance[1], pose_covariance[6], pose_covariance[7];
-  return covariance;
-}
+// Eigen::Matrix2d getXYCovariance(const std::array<double, 36> & pose_covariance)
+// {
+//   Eigen::Matrix2d covariance;
+//   covariance << pose_covariance[0], pose_covariance[1], pose_covariance[6], pose_covariance[7];
+//   return covariance;
+// }
 
 double getFormedYawAngle(
   const geometry_msgs::msg::Quaternion & measurement_quat,
@@ -185,6 +187,52 @@ void printStats()
 }
 }  // namespace
 
+inline double getMahalanobisDistanceFast(double dx, double dy, const InverseCovariance2D & inv_cov)
+{
+  return dx * dx * inv_cov.inv00 + 2.0 * dx * dy * inv_cov.inv01 + dy * dy * inv_cov.inv11;
+}
+
+// Fused: Directly computes inverse covariance from pose_covariance array
+inline InverseCovariance2D precomputeInverseCovarianceFromPose(
+  const std::array<double, 36> & pose_covariance)
+{
+  // Step 1: Extract a, b, d directly from pose_covariance (no temporary Matrix2d)
+  const double a = pose_covariance[0];  // cov(0,0)
+  const double b = pose_covariance[1];  // cov(0,1) == pose_covariance[6] (symmetry)
+  const double d = pose_covariance[7];  // cov(1,1)
+
+  // Step 2: Compute determinant and inverse components in one pass
+  const double det = a * d - b * b;
+  const double inv_det = 1.0 / det;
+
+  InverseCovariance2D result;
+  result.inv00 = d * inv_det;   // d / det
+  result.inv01 = -b * inv_det;  // -b / det
+  result.inv11 = a * inv_det;   // a / det
+  return result;
+}
+void precomputeInverseCovariancesEigen(
+  const std::vector<types::DynamicObject> & tracked_objects,
+  std::vector<InverseCovariance2D> & inv_covs)
+{
+  const size_t count = tracked_objects.size();
+  inv_covs.clear();
+  inv_covs.reserve(count);
+
+  for (const auto & obj : tracked_objects) {
+    // Extract 2x2 covariance matrix (top-left corner of 6x6 pose covariance)
+    Eigen::Matrix2d cov;
+    cov << obj.pose_covariance[0], obj.pose_covariance[1], obj.pose_covariance[6],
+      obj.pose_covariance[7];  // Note: [6] == [1] if symmetric
+
+    // Compute inverse in the fastest way Eigen can optimize
+    Eigen::Matrix2d inv = cov.inverse();
+
+    // Store results
+    inv_covs.push_back({inv(0, 0), inv(0, 1), inv(1, 1)});
+  }
+}
+
 Eigen::MatrixXd DataAssociation::calcScoreMatrix(
   const types::DynamicObjectList & measurements,
   const std::list<std::shared_ptr<Tracker>> & trackers)
@@ -240,6 +288,15 @@ Eigen::MatrixXd DataAssociation::calcScoreMatrix(
 
   const auto t_query_start = time_us();
 
+  // Pre-compute inverse covariance for each tracker
+  std::vector<InverseCovariance2D> inv_covs;
+
+  precomputeInverseCovariancesEigen(tracked_objects, inv_covs);
+  // inv_covs.reserve(tracked_objects.size());
+  // for (const auto & tracked_object : tracked_objects) {
+  //   inv_covs.push_back(precomputeInverseCovarianceFromPose(tracked_object.pose_covariance));
+  // }
+
   // For each measurement, find nearby trackers using R-tree
 
   for (size_t measurement_idx = 0; measurement_idx < measurements.objects.size();
@@ -272,8 +329,9 @@ Eigen::MatrixXd DataAssociation::calcScoreMatrix(
       const auto tracker_label = tracker_labels[tracker_idx];
 
       // The actual distance check was already done in the R-tree query
-      double score =
-        calculateScore(tracked_object, tracker_label, measurement_object, measurement_label);
+      double score = calculateScore(
+        tracked_object, tracker_label, measurement_object, measurement_label,
+        inv_covs[tracker_idx]);
       score_matrix(tracker_idx, measurement_idx) = score;
     }
   }
@@ -290,7 +348,8 @@ Eigen::MatrixXd DataAssociation::calcScoreMatrix(
 
 double DataAssociation::calculateScore(
   const types::DynamicObject & tracked_object, const std::uint8_t tracker_label,
-  const types::DynamicObject & measurement_object, const std::uint8_t measurement_label) const
+  const types::DynamicObject & measurement_object, const std::uint8_t measurement_label,
+  const InverseCovariance2D & inv_cov) const
 {
   if (!config_.can_assign_matrix(tracker_label, measurement_label)) {
     return 0.0;
@@ -321,9 +380,10 @@ double DataAssociation::calculateScore(
   }
 
   // mahalanobis dist gate
-  const double mahalanobis_dist = getMahalanobisDistance(
-    measurement_object.pose.position, tracked_object.pose.position,
-    getXYCovariance(tracked_object.pose_covariance));
+  const double mahalanobis_dist = getMahalanobisDistanceFast(dx, dy, inv_cov);
+  // const double mahalanobis_dist = getMahalanobisDistance(
+  //   measurement_object.pose.position, tracked_object.pose.position,
+  //   getXYCovariance(tracked_object.pose_covariance));
 
   constexpr double mahalanobis_dist_threshold =
     13.816;  // 99.99% confidence level for 2 degrees of freedom, chi-square critical value
@@ -336,11 +396,9 @@ double DataAssociation::calculateScore(
   if (iou < min_iou) return 0.0;
 
   // all gate is passed
-  const double dist = std::sqrt(dist_sq);
-  const double max_dist = std::sqrt(max_dist_sq);
-  double score = (max_dist - std::min(dist, max_dist)) / max_dist;
-  if (score < score_threshold_) score = 0.0;
-  return score;
+  const double ratio_sq = (dist_sq < max_dist_sq) ? dist_sq / max_dist_sq : 1.0;
+  const double score = 1.0 - std::sqrt(ratio_sq);
+  return (score >= score_threshold_) * score;
 }
 
 }  // namespace autoware::multi_object_tracker
