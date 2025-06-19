@@ -23,13 +23,13 @@
 
 #include <boost/geometry.hpp>
 
+#include <immintrin.h>
 #include <tf2/utils.h>
 
 #include <algorithm>
 #include <limits>
 #include <string>
 #include <vector>
-
 namespace autoware::multi_object_tracker
 {
 namespace shapes
@@ -42,14 +42,87 @@ inline double getSumArea(const std::vector<autoware_utils::Polygon2d> & polygons
   }
   return sum;
 }
+inline double fastArea(const autoware_utils::Polygon2d & polygon)
+{
+  const auto & pts = polygon.outer();
+  const size_t n = pts.size();
+  if (n < 3) return 0.0;
 
+  double area = 0.0;
+  // Process all edges except the last one
+  for (size_t i = 0; i < n - 1; ++i) {
+    const auto & p1 = pts[i];
+    const auto & p2 = pts[i + 1];
+    area += p1.x() * p2.y() - p2.x() * p1.y();
+  }
+  // Process last edge (from last point back to first)
+  const auto & p1 = pts[n - 1];
+  const auto & p2 = pts[0];
+  area += p1.x() * p2.y() - p2.x() * p1.y();
+  return 0.5 * std::abs(area);
+}
+
+inline double getSumAreaFast(const std::vector<autoware_utils::Polygon2d> & polygons)
+{
+  double total_sum = 0.0;
+  const size_t num_polygons = polygons.size();
+
+  for (size_t i = 0; i < num_polygons; ++i) {
+    const auto & pts = polygons[i].outer();
+    const size_t n = pts.size();
+    if (n < 3) continue;
+
+    // Process bulk with SIMD
+    __m256d sum1 = _mm256_setzero_pd();
+    __m256d sum2 = _mm256_setzero_pd();
+    size_t j = 0;
+    const size_t simd_stop = (n - 1) & ~3;  // Process in chunks of 4
+
+    for (; j < simd_stop; j += 4) {
+      // Load current points (x, y)
+      __m256d x1 = _mm256_set_pd(pts[j + 3].x(), pts[j + 2].x(), pts[j + 1].x(), pts[j].x());
+      __m256d y1 = _mm256_set_pd(pts[j + 3].y(), pts[j + 2].y(), pts[j + 1].y(), pts[j].y());
+
+      // Load next points (x, y)
+      __m256d x2 = _mm256_set_pd(pts[j + 4].x(), pts[j + 3].x(), pts[j + 2].x(), pts[j + 1].x());
+      __m256d y2 = _mm256_set_pd(pts[j + 4].y(), pts[j + 3].y(), pts[j + 2].y(), pts[j + 1].y());
+
+      // sum1 += x1 * y2
+      // sum2 += x2 * y1
+      sum1 = _mm256_fmadd_pd(x1, y2, sum1);
+      sum2 = _mm256_fmadd_pd(x2, y1, sum2);
+    }
+
+    // Horizontal sum of SIMD accumulators
+    double sum_arr1[4], sum_arr2[4];
+    _mm256_storeu_pd(sum_arr1, sum1);
+    _mm256_storeu_pd(sum_arr2, sum2);
+    double area = sum_arr1[0] + sum_arr1[1] + sum_arr1[2] + sum_arr1[3] - sum_arr2[0] -
+                  sum_arr2[1] - sum_arr2[2] - sum_arr2[3];
+
+    // Process remaining points
+    for (; j < n - 1; ++j) {
+      const auto & p1 = pts[j];
+      const auto & p2 = pts[j + 1];
+      area += p1.x() * p2.y() - p2.x() * p1.y();
+    }
+
+    // Final edge (last to first)
+    const auto & last = pts[n - 1];
+    const auto & first = pts[0];
+    area += last.x() * first.y() - first.x() * last.y();
+
+    total_sum += 0.5 * std::abs(area);
+  }
+  return total_sum;
+}
 inline double getIntersectionArea(
   const autoware_utils::Polygon2d & source_polygon,
   const autoware_utils::Polygon2d & target_polygon)
 {
   std::vector<autoware_utils::Polygon2d> intersection_polygons;
   boost::geometry::intersection(source_polygon, target_polygon, intersection_polygons);
-  return getSumArea(intersection_polygons);
+  return getSumAreaFast(intersection_polygons);
 }
 
 inline double getUnionArea(
@@ -58,7 +131,7 @@ inline double getUnionArea(
 {
   std::vector<autoware_utils::Polygon2d> union_polygons;
   boost::geometry::union_(source_polygon, target_polygon, union_polygons);
-  return getSumArea(union_polygons);
+  return getSumAreaFast(union_polygons);
 }
 
 double get2dIoU(
@@ -68,9 +141,9 @@ double get2dIoU(
   static const double MIN_AREA = 1e-6;
 
   const auto source_polygon = autoware_utils::to_polygon2d(source_object.pose, source_object.shape);
-  if (boost::geometry::area(source_polygon) < MIN_AREA) return 0.0;
+  if (fastArea(source_polygon) < MIN_AREA) return 0.0;
   const auto target_polygon = autoware_utils::to_polygon2d(target_object.pose, target_object.shape);
-  if (boost::geometry::area(target_polygon) < MIN_AREA) return 0.0;
+  if (fastArea(target_polygon) < MIN_AREA) return 0.0;
 
   const double intersection_area = getIntersectionArea(source_polygon, target_polygon);
   if (intersection_area < MIN_AREA) return 0.0;

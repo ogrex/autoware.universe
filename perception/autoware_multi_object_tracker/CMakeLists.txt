@@ -4,6 +4,17 @@ project(autoware_multi_object_tracker)
 find_package(autoware_cmake REQUIRED)
 autoware_package()
 
+# Check if AVX2 is supported
+include(CheckCXXCompilerFlag)
+check_cxx_compiler_flag("-mavx2" COMPILER_SUPPORTS_AVX2)
+
+if(COMPILER_SUPPORTS_AVX2)
+    add_compile_options(-mavx2 -mfma -O3)  # Enable AVX2 & FMA
+else()
+    message(WARNING "AVX2 not supported, falling back to scalar code")
+endif()
+
+
 # Ignore -Wnonportable-include-path in Clang for mussp
 if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   add_compile_options(-Wno-nonportable-include-path)
