@@ -35,7 +35,7 @@
 namespace autoware::multi_object_tracker
 {
 
-class CVMotionModel : public MotionModel
+class CVMotionModel : public MotionModel<4>
 {
 private:
   // attributes
@@ -56,7 +56,7 @@ public:
   CVMotionModel();
 
   enum IDX { X = 0, Y = 1, VX = 2, VY = 3 };
-  const char DIM = 4;
+  // const char DIM = 4;
 
   bool initialize(
     const rclcpp::Time & time, const double & x, const double & y,

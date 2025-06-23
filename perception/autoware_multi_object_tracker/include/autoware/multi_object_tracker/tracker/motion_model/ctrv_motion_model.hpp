@@ -36,7 +36,7 @@ namespace autoware::multi_object_tracker
 {
 
 // cspell: ignore CTRV
-class CTRVMotionModel : public MotionModel
+class CTRVMotionModel : public MotionModel<5>
 {
 private:
   // attributes
@@ -59,7 +59,7 @@ public:
   CTRVMotionModel();
 
   enum IDX { X = 0, Y = 1, YAW = 2, VEL = 3, WZ = 4 };
-  const char DIM = 5;
+  // const char DIM = 5;
 
   bool initialize(
     const rclcpp::Time & time, const double & x, const double & y, const double & yaw,
