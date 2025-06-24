@@ -19,8 +19,6 @@
 
 #include "autoware/multi_object_tracker/tracker/motion_model/bicycle_motion_model.hpp"
 
-#include "autoware/multi_object_tracker/tracker/motion_model/motion_model_base.hpp"
-
 #include <Eigen/Core>
 #include <Eigen/Geometry>
 #include <autoware_utils/math/normalization.hpp>
@@ -337,7 +335,6 @@ bool BicycleMotionModel::predictStateStep(const double dt, KalmanFilter & ekf) c
    */
 
   // Current state vector X t
-  // Eigen::MatrixXd X_t(DIM, 1);
   StateVec X_t;
   ekf.getX(X_t);
 
@@ -353,7 +350,6 @@ bool BicycleMotionModel::predictStateStep(const double dt, KalmanFilter & ekf) c
   const double vv_dtdt_lr = vel * vel * dt * dt / lr_;
 
   // Predict state vector X t+1
-  // Eigen::MatrixXd X_next_t(DIM, 1);  // predicted state
   StateVec X_next_t;
   X_next_t(IDX::X) =
     X_t(IDX::X) + vel * cos_yaw * dt - 0.5 * vel * sin_slip * w_dtdt;  // dx = v * cos(yaw) * dt
@@ -366,7 +362,6 @@ bool BicycleMotionModel::predictStateStep(const double dt, KalmanFilter & ekf) c
   X_next_t(IDX::SLIP) = X_t(IDX::SLIP) * decay_rate;  // slip_angle = asin(lr * w / v)
 
   // State transition matrix A
-  // Eigen::MatrixXd A = Eigen::MatrixXd::Identity(DIM, DIM);
   ProcessMat A;
   A.setIdentity();
   A(IDX::X, IDX::YAW) = -vel * sin_yaw * dt - 0.5 * vel * cos_yaw * w_dtdt;
@@ -418,7 +413,6 @@ bool BicycleMotionModel::predictStateStep(const double dt, KalmanFilter & ekf) c
   const double q_cov_vel = motion_params_.q_cov_acc_long * dt2;
   const double q_cov_slip = q_cov_slip_rate * dt2;
 
-  // Eigen::MatrixXd Q = Eigen::MatrixXd::Zero(DIM, DIM);
   StateMat Q;
   Q.setZero();
   // Rotate the covariance matrix according to the vehicle yaw
@@ -444,9 +438,7 @@ bool BicycleMotionModel::getPredictedState(
   geometry_msgs::msg::Twist & twist, std::array<double, 36> & twist_cov) const
 {
   // get predicted state
-  // Eigen::MatrixXd X(DIM, 1);
   StateVec X;
-  // Eigen::MatrixXd P(DIM, DIM);
   StateMat P;
   if (!MotionModel::getPredictedState(time, X, P)) {
     return false;
@@ -491,10 +483,10 @@ bool BicycleMotionModel::getPredictedState(
   cov_jacob << std::cos(X(IDX::SLIP)), -X(IDX::VEL) * std::sin(X(IDX::SLIP)),
     std::sin(X(IDX::SLIP)), X(IDX::VEL) * std::cos(X(IDX::SLIP)), std::sin(X(IDX::SLIP)) / lr_,
     X(IDX::VEL) * std::cos(X(IDX::SLIP)) / lr_;
-  Eigen::Matrix<double, 2, 2> cov_twist;
+  Eigen::Matrix2d cov_twist;
   cov_twist << P(IDX::VEL, IDX::VEL), P(IDX::VEL, IDX::SLIP), P(IDX::SLIP, IDX::VEL),
     P(IDX::SLIP, IDX::SLIP);
-  Eigen::Matrix<double, 3, 3> twist_cov_mat = cov_jacob * cov_twist * cov_jacob.transpose();
+  Eigen::Matrix3d twist_cov_mat = cov_jacob * cov_twist * cov_jacob.transpose();
   constexpr double vz_cov = 0.1 * 0.1;  // TODO(yukkysaito) Currently tentative
   constexpr double wx_cov = 0.1 * 0.1;  // TODO(yukkysaito) Currently tentative
   constexpr double wy_cov = 0.1 * 0.1;  // TODO(yukkysaito) Currently tentative

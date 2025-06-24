@@ -19,8 +19,6 @@
 
 #include "autoware/multi_object_tracker/tracker/motion_model/ctrv_motion_model.hpp"
 
-#include "autoware/multi_object_tracker/tracker/motion_model/motion_model_base.hpp"
-
 #include <Eigen/Core>
 #include <Eigen/Geometry>
 #include <autoware_utils/math/normalization.hpp>
@@ -71,8 +69,7 @@ bool CTRVMotionModel::initialize(
   X << x, y, yaw, vel, wz;
 
   // initialize covariance matrix P
-  StateMat P;
-  P.setZero();
+  StateMat P = StateMat::Zero();
   P(IDX::X, IDX::X) = pose_cov[XYZRPY_COV_IDX::X_X];
   P(IDX::Y, IDX::Y) = pose_cov[XYZRPY_COV_IDX::Y_Y];
   P(IDX::YAW, IDX::YAW) = pose_cov[XYZRPY_COV_IDX::YAW_YAW];
@@ -95,13 +92,11 @@ bool CTRVMotionModel::updateStatePose(
   Eigen::Matrix<double, DIM_Y, 1> Y;
   Y << x, y;
 
-  Eigen::Matrix<double, DIM_Y, DIM> C;
-  C.setZero();
+  Eigen::Matrix<double, DIM_Y, DIM> C = Eigen::Matrix<double, DIM_Y, DIM>::Zero();
   C(0, IDX::X) = 1.0;
   C(1, IDX::Y) = 1.0;
 
-  Eigen::Matrix<double, DIM_Y, DIM_Y> R;
-  R.setZero();
+  Eigen::Matrix<double, DIM_Y, DIM_Y> R = Eigen::Matrix<double, DIM_Y, DIM_Y>::Zero();
   R(0, 0) = pose_cov[XYZRPY_COV_IDX::X_X];
   R(0, 1) = pose_cov[XYZRPY_COV_IDX::X_Y];
   R(1, 0) = pose_cov[XYZRPY_COV_IDX::Y_X];
@@ -135,14 +130,12 @@ bool CTRVMotionModel::updateStatePoseHead(
   Eigen::Matrix<double, DIM_Y, 1> Y;
   Y << x, y, fixed_yaw;
 
-  Eigen::Matrix<double, DIM_Y, DIM> C;
-  C.setZero();
+  Eigen::Matrix<double, DIM_Y, DIM> C = Eigen::Matrix<double, DIM_Y, DIM>::Zero();
   C(0, IDX::X) = 1.0;
   C(1, IDX::Y) = 1.0;
   C(2, IDX::YAW) = 1.0;
 
-  Eigen::Matrix<double, DIM_Y, DIM_Y> R;
-  R.setZero();
+  Eigen::Matrix<double, DIM_Y, DIM_Y> R = Eigen::Matrix<double, DIM_Y, DIM_Y>::Zero();
   R(0, 0) = pose_cov[XYZRPY_COV_IDX::X_X];
   R(0, 1) = pose_cov[XYZRPY_COV_IDX::X_Y];
   R(1, 0) = pose_cov[XYZRPY_COV_IDX::Y_X];
@@ -182,15 +175,13 @@ bool CTRVMotionModel::updateStatePoseHeadVel(
   Eigen::Matrix<double, DIM_Y, 1> Y;
   Y << x, y, fixed_yaw, vel;
 
-  Eigen::Matrix<double, DIM_Y, DIM> C;
-  C.setZero();
+  Eigen::Matrix<double, DIM_Y, DIM> C = Eigen::Matrix<double, DIM_Y, DIM>::Zero();
   C(0, IDX::X) = 1.0;
   C(1, IDX::Y) = 1.0;
   C(2, IDX::YAW) = 1.0;
   C(3, IDX::VEL) = 1.0;
 
-  Eigen::Matrix<double, DIM_Y, DIM_Y> R;
-  R.setZero();
+  Eigen::Matrix<double, DIM_Y, DIM_Y> R = Eigen::Matrix<double, DIM_Y, DIM_Y>::Zero();
   R(0, 0) = pose_cov[XYZRPY_COV_IDX::X_X];
   R(0, 1) = pose_cov[XYZRPY_COV_IDX::X_Y];
   R(1, 0) = pose_cov[XYZRPY_COV_IDX::Y_X];

@@ -228,8 +228,8 @@ public:
     if (!K.allFinite()) {
       return false;
     }
-    x_ = x_ + K * (y - y_pred);
-    P_ = P_ - K * (C * P_);
+    x_ += K * (y - y_pred);
+    P_ -= K * (C * P_);
     return true;
   }
 

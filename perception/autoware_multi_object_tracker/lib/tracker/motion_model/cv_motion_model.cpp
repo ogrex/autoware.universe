@@ -19,8 +19,6 @@
 
 #include "autoware/multi_object_tracker/tracker/motion_model/cv_motion_model.hpp"
 
-#include "autoware/multi_object_tracker/tracker/motion_model/motion_model_base.hpp"
-
 #include <Eigen/Core>
 #include <Eigen/Geometry>
 #include <autoware_utils/math/normalization.hpp>
@@ -70,8 +68,7 @@ bool CVMotionModel::initialize(
   X << x, y, vx, vy;
 
   // initialize covariance matrix P
-  StateMat P;
-  P.setZero();
+  StateMat P = StateMat::Zero();
   P(IDX::X, IDX::X) = pose_cov[XYZRPY_COV_IDX::X_X];
   P(IDX::Y, IDX::Y) = pose_cov[XYZRPY_COV_IDX::Y_Y];
   P(IDX::VX, IDX::VX) = twist_cov[XYZRPY_COV_IDX::X_X];
@@ -93,13 +90,11 @@ bool CVMotionModel::updateStatePose(
   Eigen::Matrix<double, DIM_Y, 1> Y;
   Y << x, y;
 
-  Eigen::Matrix<double, DIM_Y, DIM> C;
-  C.setZero();
+  Eigen::Matrix<double, DIM_Y, DIM> C = Eigen::Matrix<double, DIM_Y, DIM>::Zero();
   C(0, IDX::X) = 1.0;
   C(1, IDX::Y) = 1.0;
 
-  Eigen::Matrix<double, DIM_Y, DIM_Y> R;
-  R.setZero();
+  Eigen::Matrix<double, DIM_Y, DIM_Y> R = Eigen::Matrix<double, DIM_Y, DIM_Y>::Zero();
   R(0, 0) = pose_cov[XYZRPY_COV_IDX::X_X];
   R(0, 1) = pose_cov[XYZRPY_COV_IDX::X_Y];
   R(1, 0) = pose_cov[XYZRPY_COV_IDX::Y_X];
@@ -122,15 +117,13 @@ bool CVMotionModel::updateStatePoseVel(
   Eigen::Matrix<double, DIM_Y, 1> Y;
   Y << x, y, vx, vy;
 
-  Eigen::Matrix<double, DIM_Y, DIM> C;
-  C.setZero();
+  Eigen::Matrix<double, DIM_Y, DIM> C = Eigen::Matrix<double, DIM_Y, DIM>::Zero();
   C(0, IDX::X) = 1.0;
   C(1, IDX::Y) = 1.0;
   C(2, IDX::VX) = 1.0;
   C(3, IDX::VY) = 1.0;
 
-  Eigen::Matrix<double, DIM_Y, DIM_Y> R;
-  R.setZero();
+  Eigen::Matrix<double, DIM_Y, DIM_Y> R = Eigen::Matrix<double, DIM_Y, DIM_Y>::Zero();
   R(0, 0) = pose_cov[XYZRPY_COV_IDX::X_X];
   R(0, 1) = pose_cov[XYZRPY_COV_IDX::X_Y];
   R(1, 0) = pose_cov[XYZRPY_COV_IDX::Y_X];
