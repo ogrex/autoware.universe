@@ -84,6 +84,35 @@ bool withinRoadLanelet(
   return false;
 }
 
+bool withinRoadLaneletNotShoulder(
+  const TrackedObject & object,
+  const std::vector<std::pair<double, lanelet::Lanelet>> & surrounding_lanelets_with_dist,
+  const bool use_yaw_information)
+{
+  for (const auto & [dist, lanelet] : surrounding_lanelets_with_dist) {
+    if (lanelet.hasAttribute(lanelet::AttributeName::Subtype)) {
+      lanelet::Attribute attr = lanelet.attribute(lanelet::AttributeName::Subtype);
+      if (
+        attr.value() == lanelet::AttributeValueString::Crosswalk ||
+        attr.value() == lanelet::AttributeValueString::Walkway || attr.value() == "road_shoulder") {
+        continue;
+      }
+    }
+
+    constexpr float yaw_threshold = 0.6;
+    bool within_lanelet = std::abs(dist) < 1e-5;
+    if (use_yaw_information) {
+      within_lanelet =
+        within_lanelet && calcAbsYawDiffBetweenLaneletAndObject(object, lanelet) < yaw_threshold;
+    }
+    if (within_lanelet) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 bool withinRoadLanelet(
   const TrackedObject & object, const lanelet::LaneletMapPtr & lanelet_map_ptr,
   const bool use_yaw_information)
@@ -97,7 +126,19 @@ bool withinRoadLanelet(
 
   return withinRoadLanelet(object, surrounding_lanelets_with_dist, use_yaw_information);
 }
+bool withinRoadLaneletNotShoulder(
+  const TrackedObject & object, const lanelet::LaneletMapPtr & lanelet_map_ptr,
+  const bool use_yaw_information)
+{
+  const auto & obj_pos = object.kinematics.pose_with_covariance.pose.position;
+  lanelet::BasicPoint2d search_point(obj_pos.x, obj_pos.y);
+  // nearest lanelet
+  constexpr double search_radius = 10.0;  // [m]
+  const auto surrounding_lanelets_with_dist =
+    lanelet::geometry::findWithin2d(lanelet_map_ptr->laneletLayer, search_point, search_radius);
 
+  return withinRoadLaneletNotShoulder(object, surrounding_lanelets_with_dist, use_yaw_information);
+}
 /**
  * @brief change label for prediction
  *
@@ -120,7 +161,7 @@ ObjectClassification::_label_type changeLabelForPrediction(
     case ObjectClassification::MOTORCYCLE:
     case ObjectClassification::BICYCLE: {  // if object is within road lanelet and satisfies yaw
                                            // constraints
-      const bool within_road_lanelet = withinRoadLanelet(object, lanelet_map_ptr_, true);
+      const bool within_road_lanelet = withinRoadLaneletNotShoulder(object, lanelet_map_ptr_, true);
       // if the object is within lanelet, do the same estimation with vehicle
       if (within_road_lanelet) return ObjectClassification::MOTORCYCLE;
 
