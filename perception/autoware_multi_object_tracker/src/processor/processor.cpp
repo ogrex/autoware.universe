@@ -203,6 +203,7 @@ void TrackerProcessor::removeOldTracker(const rclcpp::Time & time)
     }
   }
 }
+
 std::string uuidToString(const unique_identifier_msgs::msg::UUID & uuid_msg)
 {
   std::stringstream ss;
@@ -211,11 +212,15 @@ std::string uuidToString(const unique_identifier_msgs::msg::UUID & uuid_msg)
   }
   return ss.str();
 }
-double calcGeneralizedIoUThresholdUnknown(double target_speed, double generalized_iou_threshold)
+
+inline double calcGeneralizedIoUThresholdUnknown(
+  double target_speed, double generalized_iou_threshold, double static_target_speed,
+  double moving_target_speed, double static_iou_threshold)
 {
-  static constexpr double static_target_speed = 1.38;  // m/s
-  static constexpr double moving_target_speed = 5.5;   // m/s
-  static constexpr double static_iou_threshold = 0.0;
+  // If the threshold is already larger than static threshold, just return it
+  if (generalized_iou_threshold > static_iou_threshold) {
+    return generalized_iou_threshold;
+  }
   if (target_speed < static_target_speed) {
     return static_iou_threshold;
   }
@@ -294,8 +299,9 @@ void TrackerProcessor::mergeOverlappedTracker(const rclcpp::Time & time)
         is_target_known
           ? std::hypot(target_data.object.twist.linear.x, target_data.object.twist.linear.y)
           : std::hypot(source_data.object.twist.linear.x, source_data.object.twist.linear.y);
-      double generalized_iou_threshold_unknown =
-        calcGeneralizedIoUThresholdUnknown(known_object_speed, generalized_iou_threshold);
+      double generalized_iou_threshold_unknown = calcGeneralizedIoUThresholdUnknown(
+        known_object_speed, generalized_iou_threshold, config_.pruning_static_target_speed,
+        config_.pruning_moving_target_speed, config_.pruning_static_iou_threshold);
       std::cout << "known_object_speed : " << known_object_speed
                 << ", Generalized IoU threshold: " << generalized_iou_threshold_unknown
                 << ", Generalized IoU: " << generalized_iou
@@ -303,7 +309,7 @@ void TrackerProcessor::mergeOverlappedTracker(const rclcpp::Time & time)
                 << ", Source UUID: " << uuidToString(source_data.object.uuid) << std::endl;
       return (
         precision > precision_threshold || recall > recall_threshold ||
-        generalized_iou > generalized_iou_threshold);
+        generalized_iou > generalized_iou_threshold_unknown);
     } else {
       // both are unknown, use generalized IoU
       iou = shapes::get2dGeneralizedIoU(source_data.object, target_data.object);

@@ -73,6 +73,9 @@ autoware::multi_object_tracker::TrackerProcessorConfig createProcessorConfig()
     {autoware_perception_msgs::msg::ObjectClassification::BICYCLE, -0.1},
     {autoware_perception_msgs::msg::ObjectClassification::PEDESTRIAN, -0.1}};
 
+  config.pruning_moving_target_speed = 5.5;   // [m/s]
+  config.pruning_static_target_speed = 1.38;  // [m/s]
+  config.pruning_static_iou_threshold = 0.0;  // [ratio]
   // overlap distance threshold for each class
   config.pruning_distance_thresholds = {
     {autoware_perception_msgs::msg::ObjectClassification::UNKNOWN, 9.0},
