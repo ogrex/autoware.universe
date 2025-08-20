@@ -14,6 +14,7 @@
 #include "test_bench.hpp"
 
 #include <algorithm>
+#include <iostream>
 #include <map>
 #include <random>
 #include <string>
@@ -317,7 +318,7 @@ autoware::multi_object_tracker::types::DynamicObjectList TrackingTestBench::gene
     obj.uuid.uuid = stringToUUID(id);
     obj.time = stamp;
     obj.classification.emplace_back();
-    obj.classification[0].label = autoware_perception_msgs::msg::ObjectClassification::CAR;
+    obj.classification[0].label = autoware_perception_msgs::msg::ObjectClassification::TRUCK;
     obj.shape.dimensions.x = state.shape.x;
     obj.shape.dimensions.y = state.shape.y;
     obj.shape.dimensions.z = 1.5;
@@ -388,6 +389,7 @@ autoware::multi_object_tracker::types::DynamicObjectList TrackingTestBench::gene
   }
 
   // Update and generate unknown object detections
+  std::cout << "Unknown object count: " << unknown_states_.size() << std::endl;
   for (auto & [id, state] : unknown_states_) {
     if (dropout_dist_(rng_)) continue;
 
@@ -477,6 +479,7 @@ autoware::multi_object_tracker::types::DynamicObjectList TrackingTestBench::gene
 
 void TrackingTestBench::initializeObjects(const TrackingScenarioConfig & params)
 {
+  std::cout << " Calling TrackingTestBench::initializeObjects" << std::endl;
   // Initialize cars
   for (int lane = 0; lane < params.num_lanes; ++lane) {
     const float y = lane * params.lane_width;

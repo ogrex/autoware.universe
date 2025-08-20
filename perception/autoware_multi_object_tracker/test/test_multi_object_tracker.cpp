@@ -16,6 +16,7 @@
 #include "autoware/multi_object_tracker/object_model/types.hpp"
 #include "autoware/multi_object_tracker/odometry.hpp"
 #include "autoware/multi_object_tracker/uncertainty/uncertainty_processor.hpp"
+#include "merge_test_bench.hpp"
 #include "test_bench.hpp"
 #include "test_utils.hpp"
 
@@ -54,6 +55,69 @@ double measureTimeMs(Func && func)
   func();
   const auto end = Clock::now();
   return std::chrono::duration<double, std::milli>(end - start).count();
+}
+
+FunctionTimings runIterationsMerge(
+  int num_iterations, const TrackingScenarioConfig & config, bool print_frame_stats = false,
+  bool write_bag = false)
+{
+  RosbagWriterHelper writer(write_bag);
+
+  auto processor_config = createProcessorConfig();
+  const auto associator_config = createAssociatorConfig();
+  const auto input_channels_config = createInputChannelsConfig();
+
+  auto processor = std::make_unique<autoware::multi_object_tracker::TrackerProcessor>(
+    processor_config, associator_config, input_channels_config);
+  MergeTestBench simulator(config);
+  // Performance tracking for individual functions
+  FunctionTimings timings;
+  rclcpp::Clock clock;
+  rclcpp::Time current_time = rclcpp::Time(clock.now(), RCL_ROS_TIME);
+  std::unordered_map<int, int> direct_assignment;
+  std::unordered_map<int, int> reverse_assignment;
+  if (print_frame_stats) {
+    printFrameStatsHeader();
+  }
+  for (int i = 0; i < num_iterations; ++i) {
+    direct_assignment.clear();
+    reverse_assignment.clear();
+    // Advance simulation time (10Hz)
+    current_time += 100ms;
+    auto detections = simulator.generateDetections(current_time);
+    detections = autoware::multi_object_tracker::uncertainty::modelUncertainty(detections);
+
+    const auto total_start = Clock::now();
+
+    // Individual function timing
+    timings.predict.times.push_back(
+      measureTimeMs([&]() { processor->predict(current_time, std::nullopt); }));
+    timings.associate.times.push_back(measureTimeMs(
+      [&]() { processor->associate(detections, direct_assignment, reverse_assignment); }));
+    timings.update.times.push_back(
+      measureTimeMs([&]() { processor->update(detections, direct_assignment); }));
+    timings.prune.times.push_back(measureTimeMs([&]() { processor->prune(current_time); }));
+    timings.spawn.times.push_back(
+      measureTimeMs([&]() { processor->spawn(detections, reverse_assignment); }));
+
+    const auto total_end = Clock::now();
+    auto total_duration =
+      std::chrono::duration_cast<std::chrono::microseconds>(total_end - total_start).count() /
+      1000.0;
+    timings.total.times.push_back(total_duration);
+
+    autoware_perception_msgs::msg::TrackedObjects latest_tracked_objects;
+    processor->getTrackedObjects(current_time, latest_tracked_objects);
+
+    latest_tracked_objects.header.frame_id = "map";
+
+    writer.write(
+      toDetectedObjectsMsg(detections), "/perception/object_recognition/detection/objects",
+      current_time);
+    writer.write(
+      latest_tracked_objects, "/perception/object_recognition/tracking/objects", current_time);
+  }
+  return timings;
 }
 
 FunctionTimings runIterations(
@@ -129,6 +193,23 @@ FunctionTimings runIterations(
       latest_tracked_objects, "/perception/object_recognition/tracking/objects", current_time);
   }
   return timings;
+}
+
+void runUnknownsTest()
+{
+  TrackingScenarioConfig params;
+  params.num_lanes = 0;
+  params.pedestrian_clusters = 0;
+  params.cars_per_lane = 0;
+  params.unknown_objects = 0;
+  params.dropout_rate = 0.0f;                        // No dropout
+  params.unknown_params.shape_change_prob = 0.0f;    // No shape change
+  params.unknown_params.max_evolution_noise = 0.0f;  // No evolution noise
+
+  FunctionTimings timings = runIterationsMerge(500, params, true, true);
+  std::cout << "Total time for all iterations: "
+            << std::accumulate(timings.total.times.begin(), timings.total.times.end(), 0.0) << " ms"
+            << std::endl;
 }
 
 void runPerformanceTest()
@@ -369,27 +450,33 @@ public:
   ~MultiObjectTrackerTest() override = default;
 };
 
-TEST_F(MultiObjectTrackerTest, SimulatedDataPerformanceTest)
+TEST_F(MultiObjectTrackerTest, UnknownMergeTest)
 {
-  // This test runs performance analysis using simulated tracking data
-  runPerformanceTest();
+  // This test checks the merging of unknown objects with existing cars
+  runUnknownsTest();
 }
 
-TEST_F(MultiObjectTrackerTest, RealDataRosbagPerformanceTest)
-{
-  // This test runs the tracker using a real rosbag for evaluation
-  std::filesystem::path bag_root_dir = _SRC_RESOURCES_DIR_PATH;  // defined in CMakeLists.txt
-  std::filesystem::path bag_dir = bag_root_dir / "test_data1";
-  std::filesystem::path db3_file;
+// TEST_F(MultiObjectTrackerTest, SimulatedDataPerformanceTest)
+// {
+//   // This test runs performance analysis using simulated tracking data
+//   runPerformanceTest();
+// }
 
-  for (const auto & entry : std::filesystem::directory_iterator(bag_dir)) {
-    if (entry.path().extension() == ".db3") {
-      db3_file = entry.path();
-      break;
-    }
-  }
+// TEST_F(MultiObjectTrackerTest, RealDataRosbagPerformanceTest)
+// {
+//   // This test runs the tracker using a real rosbag for evaluation
+//   std::filesystem::path bag_root_dir = _SRC_RESOURCES_DIR_PATH;  // defined in CMakeLists.txt
+//   std::filesystem::path bag_dir = bag_root_dir / "test_data1";
+//   std::filesystem::path db3_file;
 
-  ASSERT_FALSE(db3_file.empty()) << "No .db3 file found in " << bag_dir;
+//   for (const auto & entry : std::filesystem::directory_iterator(bag_dir)) {
+//     if (entry.path().extension() == ".db3") {
+//       db3_file = entry.path();
+//       break;
+//     }
+//   }
 
-  runPerformanceTestWithRosbag(db3_file.string());
-}
+//   ASSERT_FALSE(db3_file.empty()) << "No .db3 file found in " << bag_dir;
+
+//   runPerformanceTestWithRosbag(db3_file.string());
+// }

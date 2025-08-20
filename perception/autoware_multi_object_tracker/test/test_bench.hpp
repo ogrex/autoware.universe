@@ -179,19 +179,19 @@ public:
     initializeObjects(params);
   }
 
-  autoware::multi_object_tracker::types::DynamicObjectList generateDetections(
+  virtual autoware::multi_object_tracker::types::DynamicObjectList generateDetections(
     const rclcpp::Time & stamp);
 
-private:
-  void initializeObjects(const TrackingScenarioConfig & params);
+protected:
+  virtual void initializeObjects(const TrackingScenarioConfig & params);
   void setOrientationFromVelocity(
     const geometry_msgs::msg::Twist & twist, geometry_msgs::msg::Pose & pose);
   // Functions to add new objects
-  void addNewCar(const std::string & id, float x, float y);
-  void addNewPedestrian(const std::string & id, float x, float y);
-  void addNewUnknown(const std::string & id, float x, float y);
+  virtual void addNewCar(const std::string & id, float x, float y);
+  virtual void addNewPedestrian(const std::string & id, float x, float y);
+  virtual void addNewUnknown(const std::string & id, float x, float y);
   // Functions to generate random shapes for unknown objects
-  void generateClusterFootprint(
+  virtual void generateClusterFootprint(
     float base_size, std::vector<geometry_msgs::msg::Point> & footprint);
   void updateUnknownShape(UnknownObjectState & state);
   struct Shape
